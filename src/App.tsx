@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { auth, logout, loginWithGoogle, db } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Car, Bell, LogOut, HelpCircle, Settings } from 'lucide-react';
+import { Car, Bell, LogOut, HelpCircle, Settings, X } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import OnboardingModal from './components/OnboardingModal';
 import SettingsModal from './components/SettingsModal';
 import HelpLegalModal from './components/HelpLegalModal';
 import type { UserSettings } from './types/userSettings';
 import { mergeUserSettings } from './types/userSettings';
+import { readLocalUserSettingsPatch } from './lib/localUserSettings';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -19,7 +20,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpTab, setHelpTab] = useState<'faq' | 'privacy' | 'terms'>('faq');
-
+  /** Sikrer ny lesing av localStorage etter onboarding / lokale innstillinger */
+  const [settingsLocalRev, setSettingsLocalRev] = useState(0);
+  const [cloudSettingsHint, setCloudSettingsHint] = useState<string | null>(null);
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -35,6 +38,7 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setRawUserSettings(undefined);
+      setCloudSettingsHint(null);
       return;
     }
     const ref = doc(db, 'user_settings', user.uid);
@@ -61,7 +65,28 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [user, rawUserSettings]);
 
-  const prefs = rawUserSettings !== undefined ? mergeUserSettings(rawUserSettings) : null;
+  const localPatch = useMemo(() => {
+    if (!user) return null;
+    return readLocalUserSettingsPatch(user.uid);
+  }, [user, settingsLocalRev]);
+
+  /** Sky vinner på felt som finnes der; «ferdig onboarding» er true om enten lokal eller sky sier det */
+  const mergedRawUserSettings = useMemo((): Partial<UserSettings> | undefined => {
+    if (rawUserSettings === undefined) return undefined;
+    const l = localPatch || {};
+    return {
+      ...l,
+      ...rawUserSettings,
+      onboardingCompleted:
+        rawUserSettings.onboardingCompleted === true || l.onboardingCompleted === true,
+    };
+  }, [rawUserSettings, localPatch]);
+
+  const prefs = useMemo(() => {
+    if (mergedRawUserSettings === undefined) return null;
+    return mergeUserSettings(mergedRawUserSettings);
+  }, [mergedRawUserSettings]);
+
   const showOnboarding = Boolean(user && prefs && !prefs.onboardingCompleted);
 
   if (loading) {
@@ -243,6 +268,28 @@ export default function App() {
         </div>
       </nav>
 
+      {cloudSettingsHint ? (
+        <div
+          className={
+            isDarkMode
+              ? 'border-b border-amber-500/25 bg-amber-950/40 px-4 py-3 text-center text-sm text-amber-100'
+              : 'border-b border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm text-amber-950'
+          }
+        >
+          <div className="mx-auto flex max-w-4xl items-start justify-center gap-3">
+            <p className="flex-1 text-left">{cloudSettingsHint}</p>
+            <button
+              type="button"
+              className="shrink-0 rounded-lg p-1 hover:bg-black/10 dark:hover:bg-white/10"
+              aria-label="Lukk"
+              onClick={() => setCloudSettingsHint(null)}
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
         {prefs ? (
           <Dashboard
@@ -304,13 +351,14 @@ export default function App() {
         open={showOnboarding}
         userId={user.uid}
         isDarkMode={isDarkMode}
-        onDone={() => {}}
+        onAppliedLocally={() => setSettingsLocalRev((n) => n + 1)}
+        onCloudSaveError={(msg) => setCloudSettingsHint(msg)}
       />
       <SettingsModal
         open={settingsOpen}
         userId={user.uid}
         isDarkMode={isDarkMode}
-        remote={rawUserSettings ?? null}
+        remote={mergedRawUserSettings ?? null}
         onClose={() => setSettingsOpen(false)}
       />
       <HelpLegalModal open={helpOpen} isDarkMode={isDarkMode} initialTab={helpTab} onClose={() => setHelpOpen(false)} />

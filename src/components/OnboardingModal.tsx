@@ -3,15 +3,25 @@ import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Car, ChevronRight, Sparkles } from 'lucide-react';
 import type { UserSettings } from '../types/userSettings';
+import { writeLocalUserSettingsPatch } from '../lib/localUserSettings';
 
 type Props = {
   open: boolean;
   userId: string;
   isDarkMode: boolean;
-  onDone: () => void;
+  /** Kall etter at valg er skrevet til localStorage — oppdaterer App slik at onboarding skjules med en gang */
+  onAppliedLocally: () => void;
+  /** Firestore skriving feilet etter at modal allerede er lukket lokalt */
+  onCloudSaveError: (message: string) => void;
 };
 
-export default function OnboardingModal({ open, userId, isDarkMode, onDone }: Props) {
+export default function OnboardingModal({
+  open,
+  userId,
+  isDarkMode,
+  onAppliedLocally,
+  onCloudSaveError,
+}: Props) {
   const [step, setStep] = useState(0);
   const [maxPrice, setMaxPrice] = useState(350000);
   const [listLimit, setListLimit] = useState(24);
@@ -24,7 +34,7 @@ export default function OnboardingModal({ open, userId, isDarkMode, onDone }: Pr
     ? 'rounded-2xl border border-slate-600 bg-slate-900 p-6 text-slate-100 shadow-2xl'
     : 'rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-2xl';
 
-  const saveAndClose = async (patch: Partial<UserSettings>) => {
+  const syncToCloud = async (patch: Partial<UserSettings>) => {
     setSaving(true);
     try {
       await setDoc(
@@ -36,18 +46,34 @@ export default function OnboardingModal({ open, userId, isDarkMode, onDone }: Pr
         },
         { merge: true },
       );
-      onDone();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'code' in e
+          ? String((e as { code: string }).code)
+          : e instanceof Error
+            ? e.message
+            : 'Kunne ikke lagre';
+      const friendly =
+        msg.includes('permission') || msg === 'permission-denied'
+          ? 'Skyinnstillinger er ikke tilgjengelige (Firestore). Valgene dine er lagret i denne nettleseren til admin har deployet regler til riktig database.'
+          : `${msg}. Du kan prøve igjen under Innstillinger.`;
+      onCloudSaveError(friendly);
     } finally {
       setSaving(false);
     }
   };
 
-  const finish = () =>
-    saveAndClose({
+  const finish = () => {
+    const patch: Partial<UserSettings> = {
       maxListPrice: maxPrice,
       listLimit,
       emailDigestInterest: digest,
-    });
+      onboardingCompleted: true,
+    };
+    writeLocalUserSettingsPatch(userId, patch);
+    onAppliedLocally();
+    void syncToCloud(patch);
+  };
 
   return (
     <div
@@ -167,7 +193,7 @@ export default function OnboardingModal({ open, userId, isDarkMode, onDone }: Pr
                 onClick={finish}
                 className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-500 disabled:opacity-60"
               >
-                {saving ? 'Lagrer…' : 'Åpne dashboard'}
+                {saving ? 'Synkroniserer…' : 'Åpne dashboard'}
               </button>
             </div>
           </>
