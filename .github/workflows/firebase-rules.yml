@@ -15,6 +15,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy Firestore Rules
-        run: npx firebase-tools deploy --only firestore:rules --project ferrous-layout-382117
+        run: npx firebase-tools deploy --only firestore:rules --project ferrous-layout-382117 --token "$FIREBASE_TOKEN"
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
