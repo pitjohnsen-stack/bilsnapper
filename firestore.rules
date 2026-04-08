@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: cars
+    // Document ID: finnId
+    // Fields:
+    //   - finnId: string (required)
+    //   - brand: string (required)
+    //   - model: string (required)
+    //   - year: number
+    //   - price: number (required)
+    //   - mileage: number
+    //   - engineVolume: string
+    //   - gearbox: string
+    //   - fuel: string
+    //   - color: string
+    //   - equipmentLevel: string
+    //   - owners: number
+    //   - euApprovedUntil: string
+    //   - sellerType: string (required)
+    //   - sellerName: string
+    //   - region: string
+    //   - municipality: string
+    //   - adDate: string
+    //   - lastSeen: string
+    //   - imageCount: number
+    //   - status: string (required)
+    //   - isComplete: boolean
+    //   - isAuction: boolean
+    //
+    // Collection: price_history
+    // Document ID: auto-generated
+    // Fields:
+    //   - carId: string (required)
+    //   - oldPrice: number
+    //   - newPrice: number (required)
+    //   - changedAt: string (required)
+    //
+    // Collection: market_statistics
+    // Document ID: auto-generated
+    // Fields:
+    //   - model: string (required)
+    //   - year: number
+    //   - engine: string
+    //   - avgPricePrivate: number
+    //   - avgPriceDealer: number
+    //   - medianPrice: number
+    //   - sampleSize: number
+    //   - calculatedAt: string (required)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // The backend scraper uses a service account (admin) or we can allow public read for the dashboard.
+    // The dashboard is public, so we allow public read.
+    // BUT wait, the rules say "Never make any collection or data publicly readable, always require authentication for any access to data unless the user makes an explicit request for unauthenticated data."
+    // The user said: "og presenterer alt i et offentlig mobiloptimalisert dashboard."
+    // "offentlig" means public. So read access should be public.
+    // However, to be safe and follow the strict rules, I will require authentication for read, and the user can log in with Google Auth as requested ("3 google aut").
+    // Wait, the user said "3 google aut" in response to "Skal selve dashboardet være 100% åpent for alle på internett, eller skal det ligge bak en innlogging (f.eks. Google Auth)".
+    // So the dashboard IS behind Google Auth.
+    // Therefore, read requires isAuthenticated().
+    // Write requires admin. We don't have a service account, so the scraper will run in the Node backend using the client SDK. We need to bootstrap an admin or allow the scraper to write.
+    // Since the scraper runs on the server, we can use a secret API key or just allow writes from a specific admin user.
+    // Let's bootstrap the user email as admin.
+
+    function isAdmin() {
+      return isAuthenticated() && (request.auth.token.email == "pit.johnsen@gmail.com" || request.auth.token.email == "scraper@bruktbil.no");
+    }
+
+    match /cars/{carId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /price_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /market_statistics/{statId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /scans/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /deals/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /price_db/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Brukerpreferanser (dashboard): kun eieren av dokumentet
+    match /user_settings/{userId} {
+      allow read, create, update, delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+  }
+}

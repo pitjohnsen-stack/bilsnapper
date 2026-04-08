@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* Bruktbil / markedsintelligens: rolig slate, teal tillit, amber «verdi & kupp» */
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-50: #f0fdfa;
+  --color-brand-500: #14b8a6;
+  --color-brand-600: #0d9488;
+  --color-brand-700: #0f766e;
+  --color-value-400: #fbbf24;
+  --color-value-500: #f59e0b;
+  --color-value-600: #d97706;
+}
+
+html {
+  font-family: var(--font-sans);
+}
+
+/* Subtil app-bakgrunn (lys) */
+body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+html.dark body {
+  @apply bg-slate-950 text-slate-100;
+}

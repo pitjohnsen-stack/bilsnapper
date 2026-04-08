@@ -1,0 +1,20 @@
+name: Deploy Firestore Rules
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firestore.rules'
+      - 'firebase.json'
+      - '.firebaserc'
+
+jobs:
+  deploy-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Firestore Rules
+        run: npx firebase-tools deploy --only firestore:rules --project ferrous-layout-382117
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

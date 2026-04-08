@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "CarAd": {
+      "title": "CarAd",
+      "description": "A car advertisement from Finn.no",
+      "type": "object",
+      "properties": {
+        "finnId": { "type": "string", "description": "Unique Finn.no ID" },
+        "brand": { "type": "string" },
+        "model": { "type": "string" },
+        "year": { "type": "number" },
+        "price": { "type": "number" },
+        "mileage": { "type": "number" },
+        "engineVolume": { "type": "string" },
+        "gearbox": { "type": "string" },
+        "fuel": { "type": "string" },
+        "color": { "type": "string" },
+        "equipmentLevel": { "type": "string" },
+        "owners": { "type": "number" },
+        "euApprovedUntil": { "type": "string" },
+        "sellerType": { "type": "string", "enum": ["privat", "forhandler", "auksjon"] },
+        "sellerName": { "type": "string" },
+        "region": { "type": "string" },
+        "municipality": { "type": "string" },
+        "adDate": { "type": "string", "format": "date-time" },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "imageCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "archived"] },
+        "isComplete": { "type": "boolean" },
+        "isAuction": { "type": "boolean" }
+      },
+      "required": ["finnId", "brand", "model", "price", "sellerType", "status"]
+    },
+    "PriceHistory": {
+      "title": "PriceHistory",
+      "description": "Price change log for a car ad",
+      "type": "object",
+      "properties": {
+        "carId": { "type": "string" },
+        "oldPrice": { "type": "number" },
+        "newPrice": { "type": "number" },
+        "changedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["carId", "newPrice", "changedAt"]
+    },
+    "MarketStatistic": {
+      "title": "MarketStatistic",
+      "description": "Pre-calculated market statistics",
+      "type": "object",
+      "properties": {
+        "model": { "type": "string" },
+        "year": { "type": "number" },
+        "engine": { "type": "string" },
+        "avgPricePrivate": { "type": "number" },
+        "avgPriceDealer": { "type": "number" },
+        "medianPrice": { "type": "number" },
+        "sampleSize": { "type": "number" },
+        "calculatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["model", "calculatedAt"]
+    }
+  },
+  "firestore": {
+    "cars": {
+      "schema": { "$ref": "#/entities/CarAd" },
+      "description": "Active and archived car ads"
+    },
+    "price_history": {
+      "schema": { "$ref": "#/entities/PriceHistory" },
+      "description": "Log of price changes"
+    },
+    "market_statistics": {
+      "schema": { "$ref": "#/entities/MarketStatistic" },
+      "description": "Pre-calculated statistics for fast dashboard loading"
+    }
+  }
+}
