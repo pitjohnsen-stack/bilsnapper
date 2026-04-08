@@ -2,13 +2,13 @@ name: Run Scraper
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # Every 2 hours, same as server.ts
-  workflow_dispatch:          # Manual trigger from GitHub UI
+    - cron: '0 */6 * * *'   # Every 6 hours (full shard run takes ~45 min)
+  workflow_dispatch:          # Manual trigger from GitHub UI or dashboard button
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -21,17 +21,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run scraper (one-shot)
+      - name: Run scraper (one-shot, year-shard mode)
         env:
           SCRAPER_EMAIL: ${{ secrets.SCRAPER_EMAIL }}
           SCRAPER_PASSWORD: ${{ secrets.SCRAPER_PASSWORD }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
-          FINN_MAX_SEARCH_PAGES: '50'
-          FINN_PAGE_DELAY_MS: '1500'
-          FINN_DEEP_SCRAPE_MAX: '0'
+          FINN_SHARD_MODE: 'year'          # 8 year-based shards → covers all 50k+ cars
+          FINN_MAX_SEARCH_PAGES: '60'      # 60 pages × 48 results = ~2880 per shard
+          FINN_PAGE_DELAY_MS: '2000'       # 2s delay between pages (polite scraping)
+          FINN_DEEP_SCRAPE_MAX: '0'        # No deep scraping (summary only, much faster)
           RUN_SCRAPER_ON_START: 'true'
           NODE_ENV: 'production'
-          # Firebase config inline (same as firebase-applet-config.json)
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
           VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
@@ -40,12 +40,10 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_FIRESTORE_DATABASE_ID: ${{ secrets.VITE_FIRESTORE_DATABASE_ID }}
         run: |
-          # Run scraper and exit after first scan completes
-          timeout 25m npx tsx server.ts &
+          # Run scraper and wait up to 80 minutes for completion
+          timeout 80m npx tsx server.ts &
           PID=$!
-          # Wait for scraper to finish (it logs "Analyzer finished." when done)
-          for i in $(seq 1 150); do
-            sleep 10
-            if ! kill -0 $PID 2>/dev/null; then break; fi
+          while kill -0 $PID 2>/dev/null; do
+            sleep 15
           done
-          kill $PID 2>/dev/null || true
+          echo "Scraper process exited."

@@ -161,6 +161,30 @@ const DEFAULT_FINN_CAR_SEARCH =
 const finnSearchUrl = () =>
   process.env.FINN_CAR_SEARCH_URL?.trim() || DEFAULT_FINN_CAR_SEARCH;
 
+/**
+ * Genererer årsbaserte shard-URLer som til sammen dekker alle biler på finn.no.
+ * Hvert shard dekker et årsintervall, slik at hvert enkelt søk har <2500 treff
+ * og vi unngår rate-limiting/blokkering.
+ */
+function generateYearShardUrls(): string[] {
+  const base = DEFAULT_FINN_CAR_SEARCH;
+  const shards: Array<{ year_from?: string; year_to?: string }> = [
+    { year_to: '2007' },
+    { year_from: '2008', year_to: '2011' },
+    { year_from: '2012', year_to: '2014' },
+    { year_from: '2015', year_to: '2017' },
+    { year_from: '2018', year_to: '2019' },
+    { year_from: '2020', year_to: '2021' },
+    { year_from: '2022', year_to: '2023' },
+    { year_from: '2024' },
+  ];
+  return shards.map(params => {
+    const url = new URL(base);
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v as string));
+    return url.toString();
+  });
+}
+
 const finnMaxSearchPages = () => {
   const n = parseInt(process.env.FINN_MAX_SEARCH_PAGES || '120', 10);
   return Number.isFinite(n) && n > 0 ? n : 120;
@@ -618,21 +642,40 @@ async function runScraper() {
     return;
   }
 
-  const searchUrl = finnSearchUrl();
-  console.log('Starting Finn.no scraper…', searchUrl);
+  const shardMode = (process.env.FINN_SHARD_MODE || '').toLowerCase();
+  const searchUrls = shardMode === 'year'
+    ? generateYearShardUrls()
+    : [finnSearchUrl()];
+
+  console.log(`Starting Finn.no scraper… ${searchUrls.length} shard(s), modus: ${shardMode || 'single'}`);
+
+  const byId = new Map<string, Record<string, unknown>>();
 
   try {
-    const summaries = await collectAllListingSummaries(searchUrl);
-    console.log(`Totalt ${summaries.length} unike annonser fra søkelisten (JSON-LD).`);
-
-    const byId = new Map<string, Record<string, unknown>>();
-    for (const s of summaries) {
-      byId.set(s.finnId, summaryToCarRecord(s));
+    for (let shardIdx = 0; shardIdx < searchUrls.length; shardIdx++) {
+      const searchUrl = searchUrls[shardIdx];
+      console.log(`\n--- Shard ${shardIdx + 1}/${searchUrls.length}: ${searchUrl} ---`);
+      try {
+        const summaries = await collectAllListingSummaries(searchUrl);
+        console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser (totalt unike så langt: ${byId.size + summaries.filter(s => !byId.has(s.finnId)).length})`);
+        for (const s of summaries) {
+          if (!byId.has(s.finnId)) byId.set(s.finnId, summaryToCarRecord(s));
+        }
+      } catch (shardErr) {
+        console.error(`Shard ${shardIdx + 1} feilet:`, shardErr);
+      }
+      if (shardIdx < searchUrls.length - 1) {
+        console.log('Venter 5s mellom shards…');
+        await new Promise(r => setTimeout(r, 5000));
+      }
     }
+
+    console.log(`\nTotalt ${byId.size} unike annonser fra alle shards.`);
 
     const deepMax = finnDeepScrapeMax();
     if (deepMax > 0) {
-      const urls = summaries.slice(0, deepMax).map(s => s.adUrl);
+      const allSummaryUrls = [...byId.values()].map(c => c.adUrl as string).filter(Boolean);
+      const urls = allSummaryUrls.slice(0, deepMax);
       console.log(`Dybdeskraping ${urls.length} annonser (FINN_DEEP_SCRAPE_MAX)…`);
       for (const adUrl of urls) {
         try {
@@ -652,8 +695,9 @@ async function runScraper() {
     await commitCarsInBatches(newCars);
     console.log(`Delta sync fullført. Oppdatert ${newCars.length} biler.`);
 
-    await runAnalyzer();
+    // Record completion BEFORE analyzer (analyzer can take long and drop connection)
     await recordScanCompleted();
+    await runAnalyzer();
   } catch (error) {
     console.error('Scraper error:', error);
   }
