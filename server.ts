@@ -78,9 +78,9 @@ nodemailer.createTestAccount().then(account => {
   console.log('📧 Nodemailer test account ready. Emails will be logged with preview URLs.');
 }).catch(err => console.error('Failed to create nodemailer test account:', err));
 
-/** Tesla (make id 0.8078). Override with FINN_CAR_SEARCH_URL for another query. */
+/** Brukte biler (alle merker). Override med FINN_CAR_SEARCH_URL for snevrere søk (f.eks. én merke). */
 const DEFAULT_FINN_CAR_SEARCH =
-  'https://www.finn.no/mobility/search/car?make=0.8078&registration_class=1&sort=PUBLISHED_DESC';
+  'https://www.finn.no/mobility/search/car?registration_class=1&sort=PUBLISHED_DESC';
 
 const finnSearchUrl = () =>
   process.env.FINN_CAR_SEARCH_URL?.trim() || DEFAULT_FINN_CAR_SEARCH;
@@ -117,7 +117,9 @@ type ListingSummary = {
 function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
   const $ = cheerio.load(html);
   const raw = $('script#seoStructuredData').first().html();
-  if (!raw?.trim()) return [];
+  if (!raw?.trim()) {
+    return extractListingSummariesFromHtmlFallback(html);
+  }
   try {
     const data = JSON.parse(raw.trim()) as {
       mainEntity?: {
@@ -133,7 +135,9 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
       };
     };
     const elements = data?.mainEntity?.itemListElement;
-    if (!Array.isArray(elements)) return [];
+    if (!Array.isArray(elements)) {
+      return extractListingSummariesFromHtmlFallback(html);
+    }
     const out: ListingSummary[] = [];
     for (const el of elements) {
       const item = el?.item;
@@ -151,7 +155,7 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
       const brand =
         typeof item.brand === 'object' && item.brand?.name
           ? item.brand.name
-          : 'Tesla';
+          : 'Ukjent';
       const model =
         typeof item.model === 'string' && item.model.trim()
           ? item.model.trim()
@@ -164,11 +168,71 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
         price,
       });
     }
-    return out;
+    if (out.length > 0) return out;
+    return extractListingSummariesFromHtmlFallback(html);
   } catch (e) {
     console.warn('Failed to parse listing summaries from seoStructuredData:', e);
-    return [];
+    return extractListingSummariesFromHtmlFallback(html);
   }
+}
+
+/**
+ * Reserve når Finn endrer / mangler script#seoStructuredData: finn lenker til annonser + pris i kort.
+ */
+function extractListingSummariesFromHtmlFallback(html: string): ListingSummary[] {
+  const $ = cheerio.load(html);
+  const byId = new Map<string, ListingSummary>();
+
+  $('a[href*="/mobility/item/"], a[href*="finnkode="]').each((_, el) => {
+    const href = ($(el).attr('href') || '').trim();
+    if (!href) return;
+    const absolute = href.startsWith('http')
+      ? href
+      : `https://www.finn.no${href.startsWith('/') ? href : `/${href}`}`;
+
+    let finnId = mobilityFinnIdFromUrl(absolute);
+    if (!finnId) {
+      const m = href.match(/[?&]finnkode=(\d+)/i) || absolute.match(/[?&]finnkode=(\d+)/i);
+      finnId = m ? m[1] : null;
+    }
+    if (!finnId || byId.has(finnId)) return;
+
+    const card = $(el).closest('article, [data-testid], li').first();
+    const scope = card.length ? card : $(el).parents().eq(4);
+    const text = scope.text().replace(/\u00a0/g, ' ');
+    const priceMatch =
+      text.match(/(\d{1,3}(?:\s\d{3})+)\s*,?\s*(?:kr|,-)/i) ||
+      text.match(/(\d{4,})\s*(?:kr|,-)/i);
+    const price = priceMatch ? parseInt(priceMatch[1].replace(/\s/g, ''), 10) : 0;
+    if (!price || price < 5000) return;
+
+    const rawTitle =
+      $(el).attr('title')?.trim() ||
+      $(el).closest('article').find('h2, h3').first().text().trim() ||
+      $(el).text().trim();
+    const title = rawTitle.replace(/\s+/g, ' ').trim();
+    let brand = 'Ukjent';
+    let model = 'Ukjent';
+    if (title.length > 1) {
+      const bits = title.split(/\s+/).filter(Boolean);
+      if (bits.length >= 2) {
+        brand = bits[0];
+        model = bits.slice(1).join(' ');
+      } else {
+        model = title;
+      }
+    }
+
+    const adUrl = `https://www.finn.no/mobility/item/${finnId}`;
+    byId.set(finnId, { finnId, adUrl, brand, model, price });
+  });
+
+  if (byId.size === 0) {
+    console.warn('Fallback-parser fant ingen annonser (Finn kan ha endret HTML).');
+  } else {
+    console.log(`Fallback-parser: ${byId.size} annonser fra lenker/tekst.`);
+  }
+  return [...byId.values()];
 }
 
 function summaryToCarRecord(s: ListingSummary) {
@@ -220,6 +284,9 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
   const seen = new Set<string>();
   const all: ListingSummary[] = [];
 
+  let consecutiveNoNew = 0;
+  const maxConsecutiveNoNew = Math.max(3, parseInt(process.env.FINN_MAX_EMPTY_PAGES || '6', 10) || 6);
+
   for (let page = 1; page <= maxPages; page++) {
     const pageUrl = new URL(baseSearchUrl);
     if (page > 1) pageUrl.searchParams.set('page', String(page));
@@ -229,7 +296,7 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
     const summaries = extractListingSummariesFromSeoHtml(html);
 
     if (summaries.length === 0) {
-      console.log(`Ingen treff på side ${page}, stopper paginering.`);
+      console.log(`Ingen parsbare treff på side ${page}, stopper paginering.`);
       break;
     }
 
@@ -243,8 +310,15 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
 
     console.log(`  +${added} nye (total ${all.length} unike)`);
     if (added === 0) {
-      console.log('Ingen nye ID-er på denne siden (kun duplikater), stopper.');
-      break;
+      consecutiveNoNew++;
+      if (consecutiveNoNew >= maxConsecutiveNoNew) {
+        console.log(
+          `${maxConsecutiveNoNew} sider på rad uten nye annonser — antar siste side / overlapp. Stopper.`,
+        );
+        break;
+      }
+    } else {
+      consecutiveNoNew = 0;
     }
 
     if (page < maxPages && delayMs > 0) {
