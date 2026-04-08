@@ -145,21 +145,42 @@ export default function Dashboard({
         ? window.location.origin
         : '');
     try {
-      if (!base) {
+      if (base) {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        const secret = import.meta.env.VITE_SCAN_SECRET;
+        if (secret) headers['x-scan-secret'] = secret;
+        const res = await fetch(`${base}/scan`, { method: 'POST', headers, body: '{}' });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || `HTTP ${res.status}`);
+        }
+        alert('Scan er startet på serveren. Oppdatering i Firestore kan ta flere minutter.');
+        return;
+      }
+      const ghToken = import.meta.env.VITE_GITHUB_TOKEN;
+      if (!ghToken) {
         alert(
-          'Sett VITE_SCANNER_URL (f.eks. Cloud Run-URL) for å trigge scan utenfra. Lokalt brukes automatisk denne appens adresse i utvikling.',
+          'Sett VITE_SCANNER_URL (f.eks. Cloud Run), eller kjør appen lokalt i dev (bruker da denne adressen), eller VITE_GITHUB_TOKEN for å trigge GitHub Actions. Scraperen kan også kjøre på timeplan via Actions.',
         );
         return;
       }
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const secret = import.meta.env.VITE_SCAN_SECRET;
-      if (secret) headers['x-scan-secret'] = secret;
-      const res = await fetch(`${base}/scan`, { method: 'POST', headers, body: '{}' });
+      const res = await fetch(
+        'https://api.github.com/repos/pitjohnsen-stack/bilsnapper/actions/workflows/scraper.yml/dispatches',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${ghToken}`,
+            Accept: 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ref: 'main' }),
+        },
+      );
       if (!res.ok) {
         const t = await res.text();
-        throw new Error(t || `HTTP ${res.status}`);
+        throw new Error(t || `GitHub API HTTP ${res.status}`);
       }
-      alert('Scan er startet på serveren. Oppdatering i Firestore kan ta flere minutter.');
+      alert('Scan er startet via GitHub Actions. Resultater oppdateres i Firestore om ca. 5–15 minutter.');
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : 'Kunne ikke starte scan.');
