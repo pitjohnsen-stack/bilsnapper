@@ -140,21 +140,42 @@ export default function Dashboard({
   const triggerScraper = async () => {
     const base = (import.meta.env.VITE_SCANNER_URL || '').replace(/\/$/, '');
     try {
-      if (!base) {
-        alert(
-          'Sett miljøvariabel VITE_SCANNER_URL i Vercel (full Cloud Run-URL uten avsluttende /). Da kan du trigge scan herfra.',
+      if (base) {
+        // Use dedicated scraper server if configured
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        const secret = import.meta.env.VITE_SCAN_SECRET;
+        if (secret) headers['x-scan-secret'] = secret;
+        const res = await fetch(`${base}/scan`, { method: 'POST', headers, body: '{}' });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || `HTTP ${res.status}`);
+        }
+        alert('Scan er startet på serveren. Oppdatering i Firestore kan ta flere minutter.');
+      } else {
+        // Trigger GitHub Actions workflow dispatch
+        const ghToken = import.meta.env.VITE_GITHUB_TOKEN;
+        if (!ghToken) {
+          alert('Ingen scrap-server konfigurert. Scraperen kjører automatisk hvert 2. time via GitHub Actions.');
+          return;
+        }
+        const res = await fetch(
+          'https://api.github.com/repos/pitjohnsen-stack/bilsnapper/actions/workflows/scraper.yml/dispatches',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${ghToken}`,
+              Accept: 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ref: 'main' }),
+          }
         );
-        return;
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || `GitHub API HTTP ${res.status}`);
+        }
+        alert('Scan er startet via GitHub Actions. Resultater oppdateres i Firestore om ca. 5–15 minutter.');
       }
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const secret = import.meta.env.VITE_SCAN_SECRET;
-      if (secret) headers['x-scan-secret'] = secret;
-      const res = await fetch(`${base}/scan`, { method: 'POST', headers, body: '{}' });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || `HTTP ${res.status}`);
-      }
-      alert('Scan er startet på serveren. Oppdatering i Firestore kan ta flere minutter.');
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : 'Kunne ikke starte scan.');
