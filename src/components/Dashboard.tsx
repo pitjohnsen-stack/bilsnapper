@@ -138,11 +138,16 @@ export default function Dashboard({
   }, []);
 
   const triggerScraper = async () => {
-    const base = (import.meta.env.VITE_SCANNER_URL || '').replace(/\/$/, '');
+    const configured = (import.meta.env.VITE_SCANNER_URL || '').trim().replace(/\/$/, '');
+    const base =
+      configured ||
+      (import.meta.env.DEV && typeof window !== 'undefined'
+        ? window.location.origin
+        : '');
     try {
       if (!base) {
         alert(
-          'Sett miljøvariabel VITE_SCANNER_URL i Vercel (full Cloud Run-URL uten avsluttende /). Da kan du trigge scan herfra.',
+          'Sett VITE_SCANNER_URL (f.eks. Cloud Run-URL) for å trigge scan utenfra. Lokalt brukes automatisk denne appens adresse i utvikling.',
         );
         return;
       }

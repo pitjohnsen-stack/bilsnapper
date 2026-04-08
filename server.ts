@@ -41,27 +41,43 @@ function scanRequestAuthorized(req: express.Request): boolean {
 }
 
 // Authenticate Backend (påkrevd: SCRAPER_EMAIL + SCRAPER_PASSWORD i .env)
-async function authenticateBackend() {
+async function authenticateBackend(): Promise<boolean> {
   const email = process.env.SCRAPER_EMAIL?.trim() ?? '';
   const password = process.env.SCRAPER_PASSWORD ?? '';
   if (!email || !password) {
-    console.error('❌ Sett SCRAPER_EMAIL og SCRAPER_PASSWORD i .env (Firebase Auth-bruker med skrivetilgang).');
-    return;
+    console.error(
+      '❌ mangler SCRAPER_EMAIL / SCRAPER_PASSWORD i .env — Firestore-skriving blokkeres av reglene.',
+    );
+    console.error(
+      '   Opprett bruker i Firebase → Authentication (e-post/passord). E-post må være tillatt «admin» i firestore.rules (f.eks. scraper@bruktbil.no eller pit.johnsen@gmail.com).',
+    );
+    return false;
+  }
+  const allowedInRules =
+    email === 'pit.johnsen@gmail.com' || email === 'scraper@bruktbil.no';
+  if (!allowedInRules) {
+    console.warn(
+      `⚠️ SCRAPER_EMAIL er «${email}», men firestore.rules krever pit.johnsen@gmail.com eller scraper@bruktbil.no — oppdater .env eller reglene.`,
+    );
   }
   try {
     await signInWithEmailAndPassword(auth, email, password);
     console.log('✅ Backend authenticated successfully.');
+    return true;
   } catch (error: unknown) {
     const code = error && typeof error === 'object' && 'code' in error ? String((error as { code: string }).code) : '';
     if (code === 'auth/user-not-found' || code === 'auth/invalid-credential') {
       try {
         await createUserWithEmailAndPassword(auth, email, password);
         console.log('✅ Backend user created and authenticated.');
+        return true;
       } catch (createError) {
         console.error('❌ Failed to create backend user:', createError);
+        return false;
       }
     } else {
       console.error('❌ Failed to authenticate backend:', error);
+      return false;
     }
   }
 }
@@ -331,15 +347,26 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
 
 async function commitCarsInBatches(cars: Record<string, unknown>[]) {
   const BATCH = 400;
-  for (let i = 0; i < cars.length; i += BATCH) {
-    const chunk = cars.slice(i, i + BATCH);
-    const batch = writeBatch(db);
-    for (const car of chunk) {
-      const finnId = car.finnId as string;
-      batch.set(doc(db, 'cars', finnId), car, { merge: true });
+  try {
+    for (let i = 0; i < cars.length; i += BATCH) {
+      const chunk = cars.slice(i, i + BATCH);
+      const batch = writeBatch(db);
+      for (const car of chunk) {
+        const finnId = car.finnId as string;
+        batch.set(doc(db, 'cars', finnId), car, { merge: true });
+      }
+      await batch.commit();
+      console.log(`Firestore: lagret batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
     }
-    await batch.commit();
-    console.log(`Firestore: lagret batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
+  } catch (e: unknown) {
+    const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
+    console.error('Firestore batch feilet:', e);
+    if (code === 'permission-denied') {
+      console.error(
+        '→ permission-denied: er backend innlogget? Sjekk SCRAPER_EMAIL/PASSWORD i .env og at e-post matcher firestore.rules (isAdmin).',
+      );
+    }
+    throw e;
   }
 }
 
@@ -473,6 +500,13 @@ function parseProductJsonLd(html: string): ProductLd | null {
 
 // Scraper & Analyzer Logic
 async function runScraper() {
+  if (!auth.currentUser) {
+    console.error(
+      '❌ Scanner stoppet: ingen Firebase Auth-sesjon for serveren. Sett SCRAPER_EMAIL og SCRAPER_PASSWORD i .env og start server på nytt.',
+    );
+    return;
+  }
+
   const searchUrl = finnSearchUrl();
   console.log('Starting Finn.no scraper…', searchUrl);
 
@@ -673,7 +707,12 @@ cron.schedule('0 3 * * 0', () => {
 });
 
 async function startServer() {
-  await authenticateBackend();
+  const authOk = await authenticateBackend();
+  if (!authOk) {
+    console.error(
+      '⚠️ Server starter uten gyldig backend-auth — skanner lagrer ikke til Firestore før .env er satt.',
+    );
+  }
   const expressApp = express();
   const PORT = Number(process.env.PORT) || 3000;
 
