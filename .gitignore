@@ -7,4 +7,10 @@ coverage/
 .env*
 !.env.example
 
+# Firebase Admin SDK (service account) — aldri commit
+firebase-adminsdk.json
+serviceAccountKey.json
+service-account.json
+*-firebase-adminsdk-*.json
+
 .vercel

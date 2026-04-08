@@ -493,11 +493,21 @@ export default function Dashboard({
                       <div
                         className={
                           isDarkMode
-                            ? 'relative flex h-36 items-center justify-center bg-slate-900/60'
-                            : 'relative flex h-36 items-center justify-center bg-slate-100'
+                            ? 'relative flex h-36 items-center justify-center overflow-hidden bg-slate-900/60'
+                            : 'relative flex h-36 items-center justify-center overflow-hidden bg-slate-100'
                         }
                       >
-                        <Car size={44} className="text-slate-400 opacity-40" />
+                        {car.imageUrl ? (
+                          <img
+                            src={car.imageUrl}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ) : (
+                          <Car size={44} className="text-slate-400 opacity-40" />
+                        )}
                         {(car.fairPrice && car.price < car.fairPrice) || car.confidence ? (
                           <span className="absolute right-3 top-3 rounded-md bg-amber-500 px-2 py-0.5 text-xs font-bold text-slate-900 shadow">
                             Mulig verdi

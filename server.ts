@@ -19,12 +19,67 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } f
 import fs from 'fs';
 import * as cheerio from 'cheerio';
 import nodemailer from 'nodemailer';
+import { initializeApp as initAdminApp, getApps, getApp, cert, applicationDefault } from 'firebase-admin/app';
+import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
+import type { DocumentData, Firestore } from 'firebase-admin/firestore';
 
 // Initialize Firebase in backend
 const firebaseConfig = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(firebaseApp);
+
+/** Når satt, brukes Admin SDK (omgår client Auth + Firestore-regler for skriving). */
+let adminFirestore: Firestore | null = null;
+
+function loadAdminServiceAccountCredential(): ReturnType<typeof cert> | ReturnType<typeof applicationDefault> | null {
+  const jsonRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  if (jsonRaw) {
+    try {
+      return cert(JSON.parse(jsonRaw));
+    } catch (e) {
+      console.error('FIREBASE_SERVICE_ACCOUNT_JSON er ugyldig:', e);
+    }
+  }
+  const pathFromEnv = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
+  const candidates = [...new Set([pathFromEnv, 'firebase-adminsdk.json', 'serviceAccountKey.json', 'service-account.json'])].filter(
+    (x): x is string => Boolean(x),
+  );
+  for (const rel of candidates) {
+    const abs = path.isAbsolute(rel) ? rel : path.resolve(process.cwd(), rel);
+    if (!fs.existsSync(abs)) continue;
+    try {
+      console.log(`📎 Firebase Admin: leser ${path.basename(abs)}`);
+      return cert(JSON.parse(fs.readFileSync(abs, 'utf-8')));
+    } catch (e) {
+      console.error(`Kunne ikke lese service account fra ${abs}:`, e);
+    }
+  }
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) {
+    try {
+      return applicationDefault();
+    } catch {
+      /* ignorert */
+    }
+  }
+  return null;
+}
+
+function tryInitFirebaseAdmin(): boolean {
+  if (adminFirestore) return true;
+  const credential = loadAdminServiceAccountCredential();
+  if (!credential) return false;
+  if (!getApps().length) {
+    initAdminApp({ credential, projectId: firebaseConfig.projectId });
+  }
+  adminFirestore = getAdminFirestore(getApp(), firebaseConfig.firestoreDatabaseId);
+  console.log('✅ Firebase Admin aktiv — scraper trenger ikke SCRAPER_EMAIL/SCRAPER_PASSWORD.');
+  return true;
+}
+
+function firestoreBackendReady(): boolean {
+  return adminFirestore != null || auth.currentUser != null;
+}
 
 let scanSecretWarned = false;
 
@@ -40,16 +95,21 @@ function scanRequestAuthorized(req: express.Request): boolean {
   return req.headers['x-scan-secret'] === secret;
 }
 
-// Authenticate Backend (påkrevd: SCRAPER_EMAIL + SCRAPER_PASSWORD i .env)
+// Authenticate Backend: foretrekk Firebase Admin (service account). Ellers SCRAPER_EMAIL + SCRAPER_PASSWORD (client SDK).
 async function authenticateBackend(): Promise<boolean> {
+  if (tryInitFirebaseAdmin()) return true;
+
   const email = process.env.SCRAPER_EMAIL?.trim() ?? '';
   const password = process.env.SCRAPER_PASSWORD ?? '';
   if (!email || !password) {
     console.error(
-      '❌ mangler SCRAPER_EMAIL / SCRAPER_PASSWORD i .env — Firestore-skriving blokkeres av reglene.',
+      '❌ Ingen Firestore-skriving: legg inn service account ELLER SCRAPER_EMAIL + SCRAPER_PASSWORD.',
     );
     console.error(
-      '   Opprett bruker i Firebase → Authentication (e-post/passord). E-post må være tillatt «admin» i firestore.rules (f.eks. scraper@bruktbil.no eller pit.johnsen@gmail.com).',
+      '   A) Enklest: Firebase Console → Prosjektinnstillinger → Service accounts → «Generer ny privat nøkkel». Lagre som firebase-adminsdk.json i prosjektmappa (allerede i .gitignore).',
+    );
+    console.error(
+      '   B) Alternativt: opprett bruker under Authentication (e-post/passord) som matcher firestore.rules, og sett SCRAPER_EMAIL / SCRAPER_PASSWORD i .env.',
     );
     return false;
   }
@@ -127,7 +187,28 @@ type ListingSummary = {
   brand: string;
   model: string;
   price: number;
+  /** Første bilde-URL fra JSON-LD (images.finncdn.no) når tilgjengelig */
+  imageUrl?: string;
 };
+
+/** Trekker ut første bilde-URL fra schema.org image (streng, liste, eller ImageObject). */
+function firstImageUrlFromJsonLd(image: unknown): string | undefined {
+  if (typeof image === 'string' && image.startsWith('http')) return image.trim();
+  if (Array.isArray(image)) {
+    for (const x of image) {
+      if (typeof x === 'string' && x.startsWith('http')) return x.trim();
+      if (x && typeof x === 'object' && 'url' in x) {
+        const u = (x as { url?: unknown }).url;
+        if (typeof u === 'string' && u.startsWith('http')) return u.trim();
+      }
+    }
+  }
+  if (image && typeof image === 'object' && 'url' in image) {
+    const u = (image as { url?: unknown }).url;
+    if (typeof u === 'string' && u.startsWith('http')) return u.trim();
+  }
+  return undefined;
+}
 
 /** Product cards from søkeresultat (JSON-LD) — pris/merke/modell uten ekstra HTTP per annonse. */
 function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
@@ -144,6 +225,7 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
             url?: string;
             model?: string;
             name?: string;
+            image?: unknown;
             brand?: { name?: string };
             offers?: { price?: number | string };
           };
@@ -176,12 +258,14 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
         typeof item.model === 'string' && item.model.trim()
           ? item.model.trim()
           : 'Ukjent';
+      const imageUrl = firstImageUrlFromJsonLd(item.image);
       out.push({
         finnId,
         adUrl: url.startsWith('http') ? url : `https://www.finn.no${url}`,
         brand,
         model,
         price,
+        ...(imageUrl ? { imageUrl } : {}),
       });
     }
     if (out.length > 0) return out;
@@ -253,6 +337,7 @@ function extractListingSummariesFromHtmlFallback(html: string): ListingSummary[]
 
 function summaryToCarRecord(s: ListingSummary) {
   const now = new Date().toISOString();
+  const imageUrl = s.imageUrl;
   return {
     finnId: s.finnId,
     brand: s.brand,
@@ -273,7 +358,7 @@ function summaryToCarRecord(s: ListingSummary) {
     municipality: 'Ukjent',
     adDate: now,
     lastSeen: now,
-    imageCount: 1,
+    ...(imageUrl ? { imageUrl, imageCount: 1 } : { imageCount: 0 }),
     status: 'active',
     isComplete: false,
     isAuction: false,
@@ -348,6 +433,19 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
 async function commitCarsInBatches(cars: Record<string, unknown>[]) {
   const BATCH = 400;
   try {
+    if (adminFirestore) {
+      for (let i = 0; i < cars.length; i += BATCH) {
+        const chunk = cars.slice(i, i + BATCH);
+        const batch = adminFirestore.batch();
+        for (const car of chunk) {
+          const finnId = car.finnId as string;
+          batch.set(adminFirestore.collection('cars').doc(finnId), car as Record<string, unknown>, { merge: true });
+        }
+        await batch.commit();
+        console.log(`Firestore (Admin): lagret batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
+      }
+      return;
+    }
     for (let i = 0; i < cars.length; i += BATCH) {
       const chunk = cars.slice(i, i + BATCH);
       const batch = writeBatch(db);
@@ -363,7 +461,7 @@ async function commitCarsInBatches(cars: Record<string, unknown>[]) {
     console.error('Firestore batch feilet:', e);
     if (code === 'permission-denied') {
       console.error(
-        '→ permission-denied: er backend innlogget? Sjekk SCRAPER_EMAIL/PASSWORD i .env og at e-post matcher firestore.rules (isAdmin).',
+        '→ permission-denied: bruk Firebase Admin-nøkkel, eller SCRAPER_EMAIL/PASSWORD + isAdmin i firestore.rules.',
       );
     }
     throw e;
@@ -434,6 +532,11 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
 
   if (!price || Number.isNaN(price)) return null;
 
+  const ogImage = $ad('meta[property="og:image"]').attr('content')?.trim();
+  const imageUrl =
+    productLd?.imageUrl ||
+    (ogImage && ogImage.startsWith('http') ? ogImage : undefined);
+
   const now = new Date().toISOString();
   return {
     finnId,
@@ -455,14 +558,20 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
     municipality: 'Ukjent',
     adDate: now,
     lastSeen: now,
-    imageCount: 1,
+    ...(imageUrl ? { imageUrl, imageCount: 1 } : {}),
     status: 'active',
     isComplete: true,
     isAuction: false,
   };
 }
 
-type ProductLd = { brand?: string; model?: string; price?: number; name?: string };
+type ProductLd = {
+  brand?: string;
+  model?: string;
+  price?: number;
+  name?: string;
+  imageUrl?: string;
+};
 
 function parseProductJsonLd(html: string): ProductLd | null {
   const $ = cheerio.load(html);
@@ -484,11 +593,13 @@ function parseProductJsonLd(html: string): ProductLd | null {
         if (!price || Number.isNaN(price)) continue;
         const b = node.brand as { name?: string } | string | undefined;
         const brandName = typeof b === 'object' && b?.name ? b.name : undefined;
+        const imageUrl = firstImageUrlFromJsonLd(node.image);
         parsed = {
           price,
           brand: typeof brandName === 'string' ? brandName : undefined,
           model: typeof node.model === 'string' ? node.model : undefined,
           name: typeof node.name === 'string' ? node.name : undefined,
+          ...(imageUrl ? { imageUrl } : {}),
         };
       }
     } catch {
@@ -500,9 +611,9 @@ function parseProductJsonLd(html: string): ProductLd | null {
 
 // Scraper & Analyzer Logic
 async function runScraper() {
-  if (!auth.currentUser) {
+  if (!firestoreBackendReady()) {
     console.error(
-      '❌ Scanner stoppet: ingen Firebase Auth-sesjon for serveren. Sett SCRAPER_EMAIL og SCRAPER_PASSWORD i .env og start server på nytt.',
+      '❌ Scanner stoppet: ingen Firestore-backend. Start serveren etter vellykket auth, legg inn firebase-adminsdk.json, eller sett SCRAPER_EMAIL/SCRAPER_PASSWORD.',
     );
     return;
   }
@@ -550,15 +661,27 @@ async function runScraper() {
 
 async function recordScanCompleted() {
   try {
-    await setDoc(
-      doc(db, 'scans', 'latest'),
-      {
-        scanTime: serverTimestamp(),
-        completedAt: serverTimestamp(),
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true },
-    );
+    const updatedAt = new Date().toISOString();
+    if (adminFirestore) {
+      await adminFirestore.collection('scans').doc('latest').set(
+        {
+          scanTime: FieldValue.serverTimestamp(),
+          completedAt: FieldValue.serverTimestamp(),
+          updatedAt,
+        },
+        { merge: true },
+      );
+    } else {
+      await setDoc(
+        doc(db, 'scans', 'latest'),
+        {
+          scanTime: serverTimestamp(),
+          completedAt: serverTimestamp(),
+          updatedAt,
+        },
+        { merge: true },
+      );
+    }
   } catch (e) {
     console.error('Kunne ikke skrive scans/latest:', e);
   }
@@ -574,9 +697,14 @@ async function runWeeklyArchiveSync() {
 async function runAnalyzer() {
   console.log('Starting Market Analyzer (Weighted)...');
   try {
-    // Fetch ALL cars (active and archived) to calculate true market value
-    const carsSnapshot = await getDocs(query(collection(db, 'cars'), where('isAuction', '==', false)));
-    const cars = carsSnapshot.docs.map(d => d.data());
+    let cars: DocumentData[];
+    if (adminFirestore) {
+      const snap = await adminFirestore.collection('cars').where('isAuction', '==', false).get();
+      cars = snap.docs.map(d => d.data());
+    } else {
+      const carsSnapshot = await getDocs(query(collection(db, 'cars'), where('isAuction', '==', false)));
+      cars = carsSnapshot.docs.map(d => d.data());
+    }
     
     // Group by model and year
     const groups: Record<string, any[]> = {};
@@ -620,8 +748,7 @@ async function runAnalyzer() {
               ? avgDealer
               : median;
 
-      const statRef = doc(db, 'market_statistics', key);
-      await setDoc(statRef, {
+      const statPayload = {
         model: group[0].model,
         brand: group[0].brand,
         year: group[0].year,
@@ -631,28 +758,54 @@ async function runAnalyzer() {
         medianPrice: median,
         sampleSize: group.length,
         calculatedAt: new Date().toISOString(),
-      });
+      };
+      if (adminFirestore) {
+        await adminFirestore.collection('market_statistics').doc(key).set(statPayload);
+      } else {
+        await setDoc(doc(db, 'market_statistics', key), statPayload);
+      }
 
       const confidence = Math.min(1, Math.max(0.2, group.length / 25));
-      let carBatch = writeBatch(db);
-      let carBatchOps = 0;
-      for (const car of group.filter((c) => c.status === 'active')) {
-        const fid = car.finnId ?? car.id;
-        if (fid == null || fid === '') continue;
-        carBatch.set(
-          doc(db, 'cars', String(fid)),
-          { fairPrice: median, confidence },
-          { merge: true },
-        );
-        carBatchOps++;
-        if (carBatchOps >= 400) {
-          await carBatch.commit();
-          carBatch = writeBatch(db);
-          carBatchOps = 0;
+      if (adminFirestore) {
+        let carBatch = adminFirestore.batch();
+        let carBatchOps = 0;
+        for (const car of group.filter((c) => c.status === 'active')) {
+          const fid = car.finnId ?? car.id;
+          if (fid == null || fid === '') continue;
+          carBatch.set(
+            adminFirestore.collection('cars').doc(String(fid)),
+            { fairPrice: median, confidence },
+            { merge: true },
+          );
+          carBatchOps++;
+          if (carBatchOps >= 400) {
+            await carBatch.commit();
+            carBatch = adminFirestore.batch();
+            carBatchOps = 0;
+          }
         }
-      }
-      if (carBatchOps > 0) {
-        await carBatch.commit();
+        if (carBatchOps > 0) await carBatch.commit();
+      } else {
+        let carBatch = writeBatch(db);
+        let carBatchOps = 0;
+        for (const car of group.filter((c) => c.status === 'active')) {
+          const fid = car.finnId ?? car.id;
+          if (fid == null || fid === '') continue;
+          carBatch.set(
+            doc(db, 'cars', String(fid)),
+            { fairPrice: median, confidence },
+            { merge: true },
+          );
+          carBatchOps++;
+          if (carBatchOps >= 400) {
+            await carBatch.commit();
+            carBatch = writeBatch(db);
+            carBatchOps = 0;
+          }
+        }
+        if (carBatchOps > 0) {
+          await carBatch.commit();
+        }
       }
 
       // Check for deals (Kupp) ONLY on active cars
@@ -696,15 +849,32 @@ async function runAnalyzer() {
   }
 }
 
-// Schedule cron job every 2 hours for Delta Sync
-cron.schedule('0 */2 * * *', () => {
-  runScraper();
-});
+const isScrapeCli =
+  process.argv.includes('--scrape-only') || process.env.SCRAPE_ONCE === '1';
 
-// Schedule cron job every Sunday at 03:00 for Archive Sync
-cron.schedule('0 3 * * 0', () => {
-  runWeeklyArchiveSync();
-});
+/** Én gang: `npm run scrape` eller `SCRAPE_ONCE=1 tsx server.ts` — auth + Finn → Firestore, deretter avslutt. */
+async function runScrapeCliAndExit(): Promise<void> {
+  const authOk = await authenticateBackend();
+  if (!authOk) {
+    console.error('Avbrutt: legg firebase-adminsdk.json i prosjektmappa, eller sett SCRAPER_EMAIL + SCRAPER_PASSWORD i .env.');
+    process.exit(1);
+  }
+  await runScraper();
+  console.log('✅ Scrape-kjøring ferdig.');
+  process.exit(0);
+}
+
+if (!isScrapeCli) {
+  // Schedule cron job every 2 hours for Delta Sync
+  cron.schedule('0 */2 * * *', () => {
+    runScraper();
+  });
+
+  // Schedule cron job every Sunday at 03:00 for Archive Sync
+  cron.schedule('0 3 * * 0', () => {
+    runWeeklyArchiveSync();
+  });
+}
 
 async function startServer() {
   const authOk = await authenticateBackend();
@@ -762,4 +932,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (isScrapeCli) {
+  void runScrapeCliAndExit();
+} else {
+  void startServer();
+}
