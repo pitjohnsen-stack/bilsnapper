@@ -29,7 +29,7 @@ jobs:
           FINN_SHARD_MODE: 'year'          # 8 year-based shards → covers all 50k+ cars
           FINN_MAX_SEARCH_PAGES: '60'      # 60 pages × 48 results = ~2880 per shard
           FINN_PAGE_DELAY_MS: '2000'       # 2s delay between pages (polite scraping)
-          FINN_DEEP_SCRAPE_MAX: '0'        # No deep scraping (summary only, much faster)
+          FINN_DEEP_SCRAPE_MAX: '300'      # Deep scrape 300 NEW cars per run (incremental)
           RUN_SCRAPER_ON_START: 'true'
           NODE_ENV: 'production'
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}

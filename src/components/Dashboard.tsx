@@ -29,6 +29,10 @@ import {
   Palette,
   Download,
   RefreshCw,
+  Sparkles,
+  X,
+  ListFilter,
+  MapPin,
 } from 'lucide-react';
 import {
   BarChart,
@@ -439,6 +443,20 @@ export default function Dashboard({
           <option value="1">1 eier</option>
           <option value="2+">Flere eiere</option>
         </select>
+        {(brandFilter !== 'all' || regionFilter !== 'all' || colorFilter !== 'all' || ownersFilter !== 'all') && (
+          <button
+            type="button"
+            onClick={() => { setBrandFilter('all'); setRegionFilter('all'); setColorFilter('all'); setOwnersFilter('all'); }}
+            className={
+              isDarkMode
+                ? 'flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'
+                : 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50'
+            }
+          >
+            <X size={14} />
+            Nullstill
+          </button>
+        )}
       </div>
 
       {activeTab === 'oversikt' ? (
@@ -470,22 +488,16 @@ export default function Dashboard({
 
             <div className={cardClass(isDarkMode)}>
               <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400">Treff i lista</h3>
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-500/15 text-slate-600 dark:text-slate-300">
-                  <TrendingDown size={22} />
+                <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400">Mulige kupp</h3>
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                  <Sparkles size={22} />
                 </div>
               </div>
               <p className="text-3xl font-bold tabular-nums text-slate-900 dark:text-white">
-                {filteredDeals.length}
-                {matchingDeals.length > filteredDeals.length ? (
-                  <span className="text-lg font-semibold text-slate-500 dark:text-slate-400">
-                    {' '}
-                    / {matchingDeals.length}
-                  </span>
-                ) : null}
+                {matchingDeals.filter((c) => typeof c.fairPrice === 'number' && c.price < c.fairPrice).length}
               </p>
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                Vist opp til {prefs.listLimit} med gjeldende filter og innstillinger
+                Annonser under beregnet verdi (av {matchingDeals.length} treff)
               </p>
             </div>
           </div>
@@ -502,6 +514,10 @@ export default function Dashboard({
                       ? `https://www.finn.no/car/used/ad.html?finnkode=${car.finnId || car.id}`
                       : '#');
                   const eu = car.euApprovedUntil || car.euControl;
+                  const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
+                  const savings = fair != null ? fair - car.price : null;
+                  const isGoodDeal = savings != null && savings > 0;
+                  const region = car.region || car.location;
                   return (
                     <article
                       key={car.id}
@@ -514,57 +530,81 @@ export default function Dashboard({
                       <div
                         className={
                           isDarkMode
-                            ? 'relative flex h-36 items-center justify-center overflow-hidden bg-slate-900/60'
-                            : 'relative flex h-36 items-center justify-center overflow-hidden bg-slate-100'
+                            ? 'relative flex h-44 items-center justify-center overflow-hidden bg-slate-900/60'
+                            : 'relative flex h-44 items-center justify-center overflow-hidden bg-slate-100'
                         }
                       >
                         {car.imageUrl ? (
                           <img
                             src={car.imageUrl}
                             alt=""
-                            className="absolute inset-0 h-full w-full object-cover"
+                            className="absolute inset-0 h-full w-full object-cover transition group-hover:scale-105"
                             loading="lazy"
                             decoding="async"
                           />
                         ) : (
                           <Car size={44} className="text-slate-400 opacity-40" />
                         )}
-                        {(car.fairPrice && car.price < car.fairPrice) || car.confidence ? (
-                          <span className="absolute right-3 top-3 rounded-md bg-amber-500 px-2 py-0.5 text-xs font-bold text-slate-900 shadow">
+                        {/* Gradient overlay for readability */}
+                        {car.imageUrl && (
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
+                        )}
+                        {isGoodDeal ? (
+                          <span className="absolute right-3 top-3 flex items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1 text-xs font-bold text-slate-900 shadow-md">
+                            <Sparkles size={12} />
+                            Spar {savings!.toLocaleString('no-NO')} kr
+                          </span>
+                        ) : car.confidence ? (
+                          <span className="absolute right-3 top-3 rounded-lg bg-teal-600/90 px-2.5 py-1 text-xs font-bold text-white shadow-md">
                             Mulig verdi
                           </span>
                         ) : null}
+                        {region && (
+                          <span className="absolute bottom-3 left-3 flex items-center gap-1 rounded-md bg-black/50 px-2 py-0.5 text-xs text-white/90 backdrop-blur-sm">
+                            <MapPin size={11} />
+                            {region}
+                          </span>
+                        )}
                       </div>
                       <div className="p-5">
-                        <div className="mb-2 flex items-start justify-between gap-2">
+                        <div className="mb-1 flex items-start justify-between gap-2">
                           <h4 className="font-semibold leading-snug text-slate-900 dark:text-white">
                             {car.brand} {car.model}
                           </h4>
-                          <span className="shrink-0 text-right text-lg font-bold tabular-nums text-teal-600 dark:text-teal-400">
-                            {car.price.toLocaleString('no-NO')} kr
-                          </span>
+                          <div className="shrink-0 text-right">
+                            <span className="block text-lg font-bold tabular-nums text-teal-600 dark:text-teal-400">
+                              {car.price.toLocaleString('no-NO')} kr
+                            </span>
+                            {fair != null && (
+                              <span className="block text-xs tabular-nums text-slate-400 line-through">
+                                {fair.toLocaleString('no-NO')} kr
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="mb-4 grid grid-cols-2 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
+                        <div className="mb-4 mt-3 grid grid-cols-2 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
                           <div className="flex items-center gap-1.5">
                             <Calendar size={14} className="text-teal-600 dark:text-teal-400" />
-                            {car.year ?? '—'}
+                            {car.year && car.year > 0 ? car.year : '—'}
                           </div>
                           <div className="flex items-center gap-1.5">
                             <Gauge size={14} className="text-teal-600 dark:text-teal-400" />
-                            {km != null ? `${Number(km).toLocaleString('no-NO')} km` : '—'}
+                            {km != null && km > 0 ? `${Number(km).toLocaleString('no-NO')} km` : '—'}
                           </div>
                           <div className="flex items-center gap-1.5">
                             <Palette size={14} className="text-teal-600 dark:text-teal-400" />
-                            {car.color ?? '—'}
+                            {car.color && car.color !== 'Ukjent' ? car.color : '—'}
                           </div>
                           <div className="flex items-center gap-1.5">
                             <Users size={14} className="text-teal-600 dark:text-teal-400" />
                             {car.owners != null ? `${car.owners} eier(e)` : '—'}
                           </div>
-                          <div className="col-span-2 flex items-center gap-1.5">
-                            <CheckCircle size={14} className="text-teal-500" />
-                            EU: {eu ?? 'Ukjent'}
-                          </div>
+                          {eu && eu !== 'Ukjent' && (
+                            <div className="col-span-2 flex items-center gap-1.5">
+                              <CheckCircle size={14} className="text-teal-500" />
+                              EU-kontroll: {eu}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center justify-between border-t border-slate-200/80 pt-4 dark:border-slate-700/80">
                           <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-600 dark:bg-slate-900/80 dark:text-slate-300">
@@ -584,10 +624,16 @@ export default function Dashboard({
                   );
                 })}
                 {filteredDeals.length === 0 && (
-                  <div
-                    className={`col-span-2 py-16 text-center ${cardClass(isDarkMode)}`}
-                  >
-                    <p className="text-slate-500 dark:text-slate-400">Ingen treff med disse filtrene.</p>
+                  <div className={`col-span-2 flex flex-col items-center gap-4 py-20 ${cardClass(isDarkMode)}`}>
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700/60">
+                      <ListFilter size={28} className="text-slate-400" />
+                    </div>
+                    <div className="text-center">
+                      <p className="font-semibold text-slate-700 dark:text-slate-300">Ingen treff</p>
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        Prøv å endre filtrene eller innstillingene dine.
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>

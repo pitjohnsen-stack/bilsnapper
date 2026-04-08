@@ -213,6 +213,22 @@ type ListingSummary = {
   price: number;
   /** Første bilde-URL fra JSON-LD (images.finncdn.no) når tilgjengelig */
   imageUrl?: string;
+  /** Årsmodell fra JSON-LD vehicleModelDate */
+  year?: number;
+  /** Kilometerstand fra JSON-LD mileageFromOdometer */
+  mileage?: number;
+  /** Drivstoff fra JSON-LD fuelType */
+  fuel?: string;
+  /** Farge fra JSON-LD color */
+  color?: string;
+  /** Girkasse fra JSON-LD vehicleTransmission */
+  gearbox?: string;
+  /** Antall tidligere eiere fra JSON-LD numberOfPreviousOwners */
+  owners?: number;
+  /** Sted/region fra JSON-LD availableAtOrFrom eller seller.address */
+  region?: string;
+  /** Selgertype: 'privat' | 'forhandler' */
+  sellerType?: string;
 };
 
 /** Trekker ut første bilde-URL fra schema.org image (streng, liste, eller ImageObject). */
@@ -234,7 +250,62 @@ function firstImageUrlFromJsonLd(image: unknown): string | undefined {
   return undefined;
 }
 
-/** Product cards from søkeresultat (JSON-LD) — pris/merke/modell uten ekstra HTTP per annonse. */
+/** Hjelper: parse år fra vehicleModelDate-streng (f.eks. "2019" eller "2019-01-01") */
+function parseYear(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && raw > 1980 && raw < 2100) return raw;
+  if (typeof raw === 'string') {
+    const m = raw.match(/\b(19\d{2}|20\d{2})\b/);
+    const y = m ? parseInt(m[1], 10) : NaN;
+    if (!Number.isNaN(y) && y > 1980 && y < 2100) return y;
+  }
+  return undefined;
+}
+
+/** Hjelper: parse km fra mileageFromOdometer (QuantitativeValue eller tall) */
+function parseMileage(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && raw >= 0) return raw;
+  if (raw && typeof raw === 'object') {
+    const qv = raw as Record<string, unknown>;
+    const val = qv.value ?? qv.unitValue;
+    if (typeof val === 'number' && val >= 0) return val;
+    if (typeof val === 'string') {
+      const n = parseInt(val.replace(/\D/g, ''), 10);
+      if (!Number.isNaN(n) && n >= 0) return n;
+    }
+  }
+  return undefined;
+}
+
+/** Hjelper: hent region/sted fra seller.address eller availableAtOrFrom */
+function parseRegion(item: Record<string, unknown>): string | undefined {
+  // availableAtOrFrom → { address: { addressLocality, addressRegion } }
+  const avail = item.availableAtOrFrom as Record<string, unknown> | undefined;
+  const addr = (avail?.address ?? (item.seller as Record<string, unknown>)?.address) as Record<string, unknown> | undefined;
+  if (addr) {
+    const loc = addr.addressLocality ?? addr.addressRegion;
+    if (typeof loc === 'string' && loc.trim()) return loc.trim();
+  }
+  // Direkte address-felt på item
+  const itemAddr = item.address as Record<string, unknown> | undefined;
+  if (itemAddr) {
+    const loc = itemAddr.addressLocality ?? itemAddr.addressRegion;
+    if (typeof loc === 'string' && loc.trim()) return loc.trim();
+  }
+  return undefined;
+}
+
+/** Hjelper: selgertype fra seller['@type'] */
+function parseSellerType(item: Record<string, unknown>): string {
+  const seller = item.seller as Record<string, unknown> | undefined;
+  const t = seller?.['@type'];
+  if (typeof t === 'string') {
+    if (t === 'Person') return 'privat';
+    if (t === 'LocalBusiness' || t === 'Organization' || t === 'AutoDealer') return 'forhandler';
+  }
+  return 'forhandler';
+}
+
+/** Product cards from søkeresultat (JSON-LD) — henter alle tilgjengelige felt uten ekstra HTTP per annonse. */
 function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
   const $ = cheerio.load(html);
   const raw = $('script#seoStructuredData').first().html();
@@ -245,14 +316,7 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
     const data = JSON.parse(raw.trim()) as {
       mainEntity?: {
         itemListElement?: Array<{
-          item?: {
-            url?: string;
-            model?: string;
-            name?: string;
-            image?: unknown;
-            brand?: { name?: string };
-            offers?: { price?: number | string };
-          };
+          item?: Record<string, unknown>;
         }>;
       };
     };
@@ -268,21 +332,30 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
       if (typeof url !== 'string') continue;
       const finnId = mobilityFinnIdFromUrl(url);
       if (!finnId) continue;
-      const priceRaw = item.offers?.price;
+
+      const priceRaw = (item.offers as Record<string, unknown> | undefined)?.price;
       const price =
         typeof priceRaw === 'number'
           ? priceRaw
           : parseInt(String(priceRaw ?? '').replace(/\D/g, ''), 10);
       if (!price || Number.isNaN(price)) continue;
-      const brand =
-        typeof item.brand === 'object' && item.brand?.name
-          ? item.brand.name
-          : 'Ukjent';
-      const model =
-        typeof item.model === 'string' && item.model.trim()
-          ? item.model.trim()
-          : 'Ukjent';
+
+      const brandRaw = item.brand as Record<string, unknown> | undefined;
+      const brand = typeof brandRaw?.name === 'string' && brandRaw.name.trim() ? brandRaw.name.trim() : 'Ukjent';
+      const model = typeof item.model === 'string' && item.model.trim() ? item.model.trim() : 'Ukjent';
       const imageUrl = firstImageUrlFromJsonLd(item.image);
+
+      // Ekstra felt fra schema.org Vehicle
+      const year = parseYear(item.vehicleModelDate ?? item.modelDate ?? item.datePublished);
+      const mileage = parseMileage(item.mileageFromOdometer ?? item.mileage);
+      const fuel = typeof item.fuelType === 'string' && item.fuelType.trim() ? item.fuelType.trim() : undefined;
+      const color = typeof item.color === 'string' && item.color.trim() && item.color !== 'Ukjent' ? item.color.trim() : undefined;
+      const gearbox = typeof item.vehicleTransmission === 'string' && item.vehicleTransmission.trim() ? item.vehicleTransmission.trim() : undefined;
+      const ownersRaw = item.numberOfPreviousOwners;
+      const owners = typeof ownersRaw === 'number' ? ownersRaw + 1 : (typeof ownersRaw === 'string' ? parseInt(ownersRaw, 10) + 1 : undefined);
+      const region = parseRegion(item);
+      const sellerType = parseSellerType(item);
+
       out.push({
         finnId,
         adUrl: url.startsWith('http') ? url : `https://www.finn.no${url}`,
@@ -290,6 +363,14 @@ function extractListingSummariesFromSeoHtml(html: string): ListingSummary[] {
         model,
         price,
         ...(imageUrl ? { imageUrl } : {}),
+        ...(year ? { year } : {}),
+        ...(mileage != null ? { mileage } : {}),
+        ...(fuel ? { fuel } : {}),
+        ...(color ? { color } : {}),
+        ...(gearbox ? { gearbox } : {}),
+        ...(owners && owners > 0 && owners < 20 ? { owners } : {}),
+        ...(region ? { region } : {}),
+        sellerType,
       });
     }
     if (out.length > 0) return out;
@@ -348,7 +429,26 @@ function extractListingSummariesFromHtmlFallback(html: string): ListingSummary[]
     }
 
     const adUrl = `https://www.finn.no/mobility/item/${finnId}`;
-    byId.set(finnId, { finnId, adUrl, brand, model, price });
+
+    // Prøv å hente år og km fra kortets tekst
+    const yearMatch = text.match(/\b(199\d|200\d|201\d|202\d)\b/);
+    const year = yearMatch ? parseInt(yearMatch[1], 10) : undefined;
+
+    const kmMatch =
+      text.match(/(\d{1,3}(?:\s\d{3})*)\s*km\b/i) ||
+      text.match(/(\d{1,3}(?:\s\d{3})*)\s*mil\b/i);
+    let mileage: number | undefined;
+    if (kmMatch) {
+      const n = parseInt(kmMatch[1].replace(/\s/g, ''), 10);
+      const isMil = /mil\b/i.test(kmMatch[0]);
+      mileage = isMil ? n * 10 : n;
+    }
+
+    byId.set(finnId, {
+      finnId, adUrl, brand, model, price,
+      ...(year ? { year } : {}),
+      ...(mileage != null ? { mileage } : {}),
+    });
   });
 
   if (byId.size === 0) {
@@ -361,28 +461,27 @@ function extractListingSummariesFromHtmlFallback(html: string): ListingSummary[]
 
 function summaryToCarRecord(s: ListingSummary) {
   const now = new Date().toISOString();
-  const imageUrl = s.imageUrl;
   return {
     finnId: s.finnId,
     brand: s.brand,
     model: s.model,
-    year: 0,
+    year: s.year ?? 0,
     price: s.price,
-    mileage: 0,
+    mileage: s.mileage ?? 0,
     engineVolume: 'Ukjent',
-    gearbox: 'Ukjent',
-    fuel: 'Ukjent',
-    color: 'Ukjent',
+    gearbox: s.gearbox ?? 'Ukjent',
+    fuel: s.fuel ?? 'Ukjent',
+    color: s.color ?? 'Ukjent',
     equipmentLevel: 'Standard',
-    owners: 1,
+    owners: s.owners ?? 1,
     euApprovedUntil: 'Ukjent',
-    sellerType: 'forhandler',
+    sellerType: s.sellerType ?? 'forhandler',
     sellerName: 'Ukjent',
-    region: 'Ukjent',
+    region: s.region ?? 'Ukjent',
     municipality: 'Ukjent',
     adDate: now,
     lastSeen: now,
-    ...(imageUrl ? { imageUrl, imageCount: 1 } : { imageCount: 0 }),
+    ...(s.imageUrl ? { imageUrl: s.imageUrl, imageCount: 1 } : { imageCount: 0 }),
     status: 'active',
     isComplete: false,
     isAuction: false,
@@ -541,18 +640,39 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
   let color = 'Ukjent';
   let owners = 1;
 
+  let region = 'Ukjent';
+  let municipality = 'Ukjent';
+  let sellerType = 'forhandler';
+
   $ad('dt').each((_, el) => {
     const label = $ad(el).text().trim();
     const value = $ad(el).next('dd').text().trim();
 
     if (label === 'Kilometerstand') mileage = parseInt(value.replace(/[^0-9]/g, ''), 10) || 0;
-    if (label === 'Årsmodell') year = parseInt(value.replace(/[^0-9]/g, ''), 10) || 0;
-    if (label === 'EU-godkjent til') euApprovedUntil = value;
+    // Finn.no uses 'Modellår' (not 'Årsmodell') on most pages
+    if (label === 'Modellår' || label === 'Årsmodell' || label === 'Registreringsår') {
+      year = parseInt(value.replace(/[^0-9]/g, ''), 10) || 0;
+    }
+    if (label === 'Neste frist for EU-kontroll' || label === 'EU-godkjent til' || label === 'Sist EU-godkjent') {
+      euApprovedUntil = value;
+    }
     if (label === 'Girkasse') gearbox = value;
     if (label === 'Drivstoff') fuel = value;
     if (label === 'Farge') color = value;
-    if (label === 'Antall eiere') owners = parseInt(value.replace(/[^0-9]/g, ''), 10) || 1;
+    if (label === 'Eiere' || label === 'Antall eiere' || label === 'Antall tidligere eiere') {
+      owners = parseInt(value.replace(/[^0-9]/g, ''), 10) || 1;
+    }
+    if (label === 'Bilen står i' || label === 'Fylke' || label === 'Region') region = value;
+    if (label === 'Kommune' || label === 'Sted') municipality = value;
   });
+
+  // Selgertype: se etter "Selger" i dl, eller sjekk sidetekst
+  const sellerText = $ad('dt').filter((_, el) => $ad(el).text().trim() === 'Selgertype').next('dd').text().trim();
+  if (sellerText) {
+    sellerType = /privat/i.test(sellerText) ? 'privat' : 'forhandler';
+  } else if ($ad('[data-testid="object-page-owner"]').length || $ad('.u-caption:contains("Privat")').length) {
+    sellerType = 'privat';
+  }
 
   if (!price || Number.isNaN(price)) return null;
 
@@ -576,10 +696,10 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
     equipmentLevel: 'Standard',
     owners,
     euApprovedUntil,
-    sellerType: 'forhandler',
+    sellerType,
     sellerName: 'Ukjent',
-    region: 'Ukjent',
-    municipality: 'Ukjent',
+    region,
+    municipality,
     adDate: now,
     lastSeen: now,
     ...(imageUrl ? { imageUrl, imageCount: 1 } : {}),
@@ -674,9 +794,27 @@ async function runScraper() {
 
     const deepMax = finnDeepScrapeMax();
     if (deepMax > 0) {
-      const allSummaryUrls = [...byId.values()].map(c => c.adUrl as string).filter(Boolean);
-      const urls = allSummaryUrls.slice(0, deepMax);
-      console.log(`Dybdeskraping ${urls.length} annonser (FINN_DEEP_SCRAPE_MAX)…`);
+      // Prioriter biler som IKKE allerede er i Firestore med komplett data (isComplete=true)
+      // Hent eksisterende finnIds med isComplete=true fra Firestore
+      let alreadyComplete = new Set<string>();
+      try {
+        if (adminFirestore) {
+          const snap = await adminFirestore.collection('cars').where('isComplete', '==', true).select('finnId').get();
+          snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
+        } else {
+          const snap = await getDocs(query(collection(db, 'cars'), where('isComplete', '==', true)));
+          snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
+        }
+        console.log(`${alreadyComplete.size} biler er allerede dybdeskrapet — hopper over disse.`);
+      } catch (e) {
+        console.warn('Kunne ikke hente isComplete-liste, deep-scraper alle:', e);
+      }
+
+      // Prioriter nye biler (ikke i alreadyComplete), ta opp til deepMax
+      const allCars = [...byId.values()];
+      const newCars = allCars.filter(c => !alreadyComplete.has(String(c.finnId)));
+      const urls = newCars.slice(0, deepMax).map(c => c.adUrl as string).filter(Boolean);
+      console.log(`Dybdeskraping ${urls.length} NYE annonser av ${newCars.length} totalt nye (FINN_DEEP_SCRAPE_MAX=${deepMax})…`);
       for (const adUrl of urls) {
         try {
           const detailed = await deepScrapeSingleAd(adUrl);
@@ -750,16 +888,17 @@ async function runAnalyzer() {
       cars = carsSnapshot.docs.map(d => d.data());
     }
     
-    // Group by model and year
+    // Group by model and year — year=0 betyr manglende data, hopp over for fairPrice
     const groups: Record<string, any[]> = {};
     cars.forEach(car => {
+      if (!car.year || car.year === 0) return; // Ikke grupper biler uten årsdata
       const key = `${car.brand}_${car.model}_${car.year}`;
       if (!groups[key]) groups[key] = [];
       groups[key].push(car);
     });
 
     for (const [key, group] of Object.entries(groups)) {
-      if (group.length < 1) continue;
+      if (group.length < 3) continue; // Minst 3 biler for meningsfull statistikk
       
       // Sort by price to remove top/bottom 2% (simplified for prototype)
       group.sort((a, b) => a.price - b.price);
