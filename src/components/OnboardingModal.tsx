@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Car, ChevronRight, Sparkles } from 'lucide-react';
@@ -15,6 +15,8 @@ type Props = {
   onCloudSaveError: (message: string) => void;
 };
 
+const TOTAL_STEPS = 3;
+
 export default function OnboardingModal({
   open,
   userId,
@@ -27,6 +29,15 @@ export default function OnboardingModal({
   const [listLimit, setListLimit] = useState(24);
   const [digest, setDigest] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open || saving) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && step < TOTAL_STEPS - 1) setStep((s) => Math.max(0, s - 1));
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open, saving, step]);
 
   if (!open) return null;
 
@@ -83,6 +94,17 @@ export default function OnboardingModal({
       aria-labelledby="onb-title"
     >
       <div className={`w-full max-w-lg ${panel}`}>
+        <div className="mb-4 flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+          <span>Steg {step + 1} av {TOTAL_STEPS}</span>
+          <div className="flex gap-1">
+            {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
+              <div
+                key={i}
+                className={`h-1.5 w-6 rounded-full transition-colors ${i <= step ? 'bg-teal-500' : isDarkMode ? 'bg-slate-700' : 'bg-slate-200'}`}
+              />
+            ))}
+          </div>
+        </div>
         {step === 0 && (
           <>
             <div className="mb-4 flex items-center gap-2 text-teal-500">

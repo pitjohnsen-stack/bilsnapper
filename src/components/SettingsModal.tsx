@@ -20,8 +20,10 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
   const [onlyBelowFair, setOnlyBelowFair] = useState(m.onlyBelowFair);
   const [minConfidence, setMinConfidence] = useState(m.minConfidence?.toString() ?? '');
   const [listLimit, setListLimit] = useState(m.listLimit);
+  const [minYear, setMinYear] = useState(m.minYear?.toString() ?? '');
   const [emailDigestInterest, setEmailDigestInterest] = useState(m.emailDigestInterest);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -31,8 +33,19 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
     setOnlyBelowFair(x.onlyBelowFair);
     setMinConfidence(x.minConfidence?.toString() ?? '');
     setListLimit(x.listLimit);
+    setMinYear(x.minYear?.toString() ?? '');
     setEmailDigestInterest(x.emailDigestInterest);
+    setSaveError(null);
   }, [open, remote]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -46,9 +59,14 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       const minS = minSavingKr.trim() === '' ? null : Math.max(0, parseInt(minSavingKr, 10) || 0);
       const minC = minConfidence.trim() === '' ? null : Math.min(1, Math.max(0, parseFloat(minConfidence) || 0));
+      const minY = minYear.trim() === '' ? null : (() => {
+        const y = parseInt(minYear, 10);
+        return y > 1980 && y <= new Date().getFullYear() + 1 ? y : null;
+      })();
       await setDoc(
         doc(db, 'user_settings', userId),
         {
@@ -57,12 +75,16 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
           onlyBelowFair,
           minConfidence: minC,
           listLimit: Math.min(100, Math.max(1, listLimit)),
+          minYear: minY,
           emailDigestInterest,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
       );
       onClose();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Ukjent feil';
+      setSaveError(`Lagring feilet: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -104,6 +126,20 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
             max={100}
             value={listLimit}
             onChange={(e) => setListLimit(Number(e.target.value))}
+          />
+        </label>
+
+        <label className="mt-4 block text-sm font-medium">
+          Minimum årsmodell (valgfritt)
+          <input
+            type="number"
+            className={input}
+            min={1981}
+            max={new Date().getFullYear() + 1}
+            step={1}
+            placeholder="f.eks. 2015"
+            value={minYear}
+            onChange={(e) => setMinYear(e.target.value)}
           />
         </label>
 
@@ -153,6 +189,12 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
           />
           Varsle meg når e-post / varsler lanseres
         </label>
+
+        {saveError && (
+          <p className="mt-4 rounded-lg border border-red-500/30 bg-red-950/30 px-3 py-2 text-sm text-red-300" role="alert">
+            {saveError}
+          </p>
+        )}
 
         <div className="mt-6 flex justify-end gap-2">
           <button

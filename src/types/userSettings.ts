@@ -11,6 +11,8 @@ export interface UserSettings {
   minConfidence?: number | null;
   /** Antall kort i listen (1–100) */
   listLimit?: number;
+  /** Minimumsårsmodell for filtrering */
+  minYear?: number | null;
   /** Interesse for fremtidige e-postoppsummeringer (ingen utsending i MVP) */
   emailDigestInterest?: boolean;
   updatedAt?: string;
@@ -23,6 +25,7 @@ export function mergeUserSettings(raw: Partial<UserSettings> | null | undefined)
   onlyBelowFair: boolean;
   minConfidence: number | null;
   listLimit: number;
+  minYear: number | null;
   emailDigestInterest: boolean;
 } {
   return {
@@ -36,6 +39,7 @@ export function mergeUserSettings(raw: Partial<UserSettings> | null | undefined)
       if (typeof n !== 'number' || Number.isNaN(n)) return 24;
       return Math.min(100, Math.max(1, Math.round(n)));
     })(),
+    minYear: typeof raw?.minYear === 'number' && raw.minYear > 1980 ? raw.minYear : null,
     emailDigestInterest: raw?.emailDigestInterest === true,
   };
 }

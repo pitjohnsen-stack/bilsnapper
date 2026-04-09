@@ -71,6 +71,15 @@ export default function HelpLegalModal({ open, isDarkMode, initialTab = 'faq', o
     if (open) setTab(initialTab);
   }, [open, initialTab]);
 
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const panel = isDarkMode

@@ -14,7 +14,13 @@ import { readLocalUserSettingsPatch } from './lib/localUserSettings';
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem('bilsnapper_dark_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [loginError, setLoginError] = useState<string | null>(null);
   const [rawUserSettings, setRawUserSettings] = useState<Partial<UserSettings> | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -33,6 +39,11 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
+    try {
+      localStorage.setItem('bilsnapper_dark_mode', String(isDarkMode));
+    } catch {
+      /* private mode / full disk */
+    }
   }, [isDarkMode]);
 
   useEffect(() => {
@@ -92,7 +103,9 @@ export default function App() {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950">
-        <div className="h-12 w-12 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
+        <div role="status" aria-label="Laster">
+          <div className="h-12 w-12 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
+        </div>
         <p className="text-sm text-slate-400">Laster…</p>
       </div>
     );
@@ -245,12 +258,21 @@ export default function App() {
                   : 'ml-1 flex items-center gap-2 border-l border-slate-200 pl-3'
               }
             >
-              <img
-                src={user.photoURL || ''}
-                alt=""
-                className="h-9 w-9 rounded-full ring-2 ring-teal-500/40"
-                referrerPolicy="no-referrer"
-              />
+              {user.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt={user.displayName ?? 'Bruker'}
+                  className="h-9 w-9 rounded-full ring-2 ring-teal-500/40"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-teal-600 text-sm font-bold text-white ring-2 ring-teal-500/40"
+                  aria-label={user.displayName ?? 'Bruker'}
+                >
+                  {(user.displayName ?? user.email ?? 'B').charAt(0).toUpperCase()}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => logout()}
@@ -299,7 +321,7 @@ export default function App() {
             prefs={prefs}
           />
         ) : (
-          <div className="flex justify-center py-24">
+          <div className="flex justify-center py-24" role="status" aria-label="Laster innstillinger">
             <div className="h-10 w-10 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
           </div>
         )}
