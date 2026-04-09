@@ -209,11 +209,11 @@ export default function Dashboard({
     [deals],
   );
   const uniqueColors = useMemo(
-    () => Array.from(new Set(deals.map((d) => d.color))).filter((c): c is string => Boolean(c) && c !== 'Ukjent').sort(),
+    () => Array.from(new Set(deals.map((d) => d.color))).filter((c) => c && c !== 'Ukjent').sort() as string[],
     [deals],
   );
   const uniqueFuels = useMemo(
-    () => Array.from(new Set(deals.map((d) => d.fuel))).filter((f): f is string => Boolean(f) && f !== 'Ukjent').sort(),
+    () => Array.from(new Set(deals.map((d) => d.fuel))).filter((f) => f && f !== 'Ukjent').sort() as string[],
     [deals],
   );
   const uniqueYears = useMemo(
@@ -233,7 +233,7 @@ export default function Dashboard({
         regionFilter === 'all' || car.region === regionFilter || car.location === regionFilter;
       const matchColor = colorFilter === 'all' || car.color === colorFilter;
       const matchOwners =
-        ownersFilter === 'all' || (ownersFilter === '1' ? car.owners === 1 : (car.owners ?? 0) > 1);
+        ownersFilter === 'all' || (ownersFilter === '1' ? car.owners === 1 : car.owners != null && car.owners > 1);
       const matchFuel = fuelFilter === 'all' || car.fuel === fuelFilter;
       const matchYear = yearFilter === 'all' || String(car.year) === yearFilter;
       if (!matchBrand || !matchRegion || !matchColor || !matchOwners || !matchFuel || !matchYear || !(car.price > 0)) return false;

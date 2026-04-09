@@ -33,7 +33,7 @@ export default function OnboardingModal({
   useEffect(() => {
     if (!open || saving) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && step < TOTAL_STEPS - 1) setStep((s) => Math.max(0, s - 1));
+      if (e.key === 'Escape' && step > 0) setStep((s) => s - 1);
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
