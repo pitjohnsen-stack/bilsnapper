@@ -56,7 +56,7 @@ export default function App() {
     const unsubscribe = onSnapshot(
       ref,
       (snap) => {
-        setRawUserSettings(snap.exists ? (snap.data() as Partial<UserSettings>) : {});
+        setRawUserSettings(snap.exists() ? (snap.data() as Partial<UserSettings>) : {});
       },
       (err) => {
         console.error('user_settings lytting feilet:', err);

@@ -8,7 +8,6 @@ import {
   orderBy,
   limit,
   doc,
-  Timestamp,
 } from 'firebase/firestore';
 import { mergeUserSettings } from '../types/userSettings';
 import type { CarListing, MarketStats } from '../types/car';
@@ -76,7 +75,9 @@ type SortBy = 'price_asc' | 'price_desc' | 'year_desc' | 'km_asc' | 'savings_des
 
 function formatScanTime(value: unknown): string | null {
   if (value == null) return null;
-  if (value instanceof Timestamp) return value.toDate().toLocaleString('no-NO');
+  if (typeof value === 'object' && value !== null && 'toDate' in value && typeof (value as { toDate: unknown }).toDate === 'function') {
+    return (value as { toDate: () => Date }).toDate().toLocaleString('no-NO');
+  }
   if (typeof value === 'object' && value !== null && 'seconds' in value) {
     const s = (value as { seconds: number }).seconds;
     if (typeof s === 'number') return new Date(s * 1000).toLocaleString('no-NO');
@@ -233,7 +234,8 @@ export default function Dashboard({
         regionFilter === 'all' || car.region === regionFilter || car.location === regionFilter;
       const matchColor = colorFilter === 'all' || car.color === colorFilter;
       const matchOwners =
-        ownersFilter === 'all' || (ownersFilter === '1' ? car.owners === 1 : car.owners != null && car.owners > 1);
+        ownersFilter === 'all' ||
+        (ownersFilter === '1' ? car.owners != null && car.owners === 1 : car.owners != null && car.owners > 1);
       const matchFuel = fuelFilter === 'all' || car.fuel === fuelFilter;
       const matchYear = yearFilter === 'all' || String(car.year) === yearFilter;
       if (!matchBrand || !matchRegion || !matchColor || !matchOwners || !matchFuel || !matchYear || !(car.price > 0)) return false;

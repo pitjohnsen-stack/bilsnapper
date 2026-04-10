@@ -21,7 +21,10 @@ import * as cheerio from 'cheerio';
 import nodemailer from 'nodemailer';
 import { initializeApp as initAdminApp, getApps, getApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
-import type { DocumentData, Firestore } from 'firebase-admin/firestore';
+import type { DocumentData, Firestore, QueryDocumentSnapshot } from 'firebase-admin/firestore';
+
+// Alias to avoid long repetitive type names
+type AdminQueryDoc = QueryDocumentSnapshot;
 
 // Initialize Firebase in backend
 const firebaseConfig = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
@@ -142,17 +145,39 @@ async function authenticateBackend(): Promise<boolean> {
   }
 }
 
-// Setup Nodemailer Test Account
+// Setup Nodemailer — prefers real SMTP when SMTP_HOST is set, falls back to Ethereal test account
 let transporter: nodemailer.Transporter | null = null;
-nodemailer.createTestAccount().then(account => {
-  transporter = nodemailer.createTransport({
-    host: account.smtp.host,
-    port: account.smtp.port,
-    secure: account.smtp.secure,
-    auth: { user: account.user, pass: account.pass }
-  });
-  console.log('📧 Nodemailer test account ready. Emails will be logged with preview URLs.');
-}).catch(err => console.error('Failed to create nodemailer test account:', err));
+
+async function setupMailTransporter(): Promise<void> {
+  const smtpHost = process.env.SMTP_HOST?.trim();
+  if (smtpHost) {
+    transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER ?? '',
+        pass: process.env.SMTP_PASS ?? '',
+      },
+    });
+    console.log(`📧 Nodemailer konfigurert med SMTP: ${smtpHost}`);
+  } else {
+    try {
+      const account = await nodemailer.createTestAccount();
+      transporter = nodemailer.createTransport({
+        host: account.smtp.host,
+        port: account.smtp.port,
+        secure: account.smtp.secure,
+        auth: { user: account.user, pass: account.pass },
+      });
+      console.log('📧 Nodemailer test-konto klar. E-poster logges med forhåndsvisnings-URL.');
+    } catch (err: unknown) {
+      console.error('Klarte ikke å opprette nodemailer test-konto:', err);
+    }
+  }
+}
+
+void setupMailTransporter();
 
 /** Brukte biler (alle merker). Override med FINN_CAR_SEARCH_URL for snevrere søk (f.eks. én merke). */
 const DEFAULT_FINN_CAR_SEARCH =
@@ -388,7 +413,7 @@ function extractListingSummariesFromHtmlFallback(html: string): ListingSummary[]
   const $ = cheerio.load(html);
   const byId = new Map<string, ListingSummary>();
 
-  $('a[href*="/mobility/item/"], a[href*="finnkode="]').each((_, el) => {
+  $('a[href*="/mobility/item/"], a[href*="finnkode="]').each((_: number, el: cheerio.Element) => {
     const href = ($(el).attr('href') || '').trim();
     if (!href) return;
     const absolute = href.startsWith('http')
@@ -644,7 +669,7 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
   let municipality = 'Ukjent';
   let sellerType = 'forhandler';
 
-  $ad('dt').each((_, el) => {
+  $ad('dt').each((_: number, el: cheerio.Element) => {
     const label = $ad(el).text().trim();
     const value = $ad(el).next('dd').text().trim();
 
@@ -667,7 +692,7 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
   });
 
   // Selgertype: se etter "Selger" i dl, eller sjekk sidetekst
-  const sellerText = $ad('dt').filter((_, el) => $ad(el).text().trim() === 'Selgertype').next('dd').text().trim();
+  const sellerText = $ad('dt').filter((_: number, el: cheerio.Element) => $ad(el).text().trim() === 'Selgertype').next('dd').text().trim();
   if (sellerText) {
     sellerType = /privat/i.test(sellerText) ? 'privat' : 'forhandler';
   } else if ($ad('[data-testid="object-page-owner"]').length || $ad('.u-caption:contains("Privat")').length) {
@@ -720,7 +745,7 @@ type ProductLd = {
 function parseProductJsonLd(html: string): ProductLd | null {
   const $ = cheerio.load(html);
   let parsed: ProductLd | null = null;
-  $('script[type="application/ld+json"]').each((_, el) => {
+  $('script[type="application/ld+json"]').each((_: number, el: cheerio.Element) => {
     const raw = $(el).html();
     if (!raw?.trim()) return;
     try {
@@ -800,10 +825,10 @@ async function runScraper() {
       try {
         if (adminFirestore) {
           const snap = await adminFirestore.collection('cars').where('isComplete', '==', true).select('finnId').get();
-          snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
+          snap.docs.forEach((d: AdminQueryDoc) => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
         } else {
           const snap = await getDocs(query(collection(db, 'cars'), where('isComplete', '==', true)));
-          snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
+          snap.docs.forEach((d: { data: () => Record<string, unknown> }) => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
         }
         console.log(`${alreadyComplete.size} biler er allerede dybdeskrapet — hopper over disse.`);
       } catch (e) {
@@ -830,6 +855,10 @@ async function runScraper() {
 
     const newCars = [...byId.values()];
     console.log(`Skriver ${newCars.length} biler til Firestore…`);
+
+    // Detect price changes before writing new data
+    await recordPriceChanges(newCars);
+
     await commitCarsInBatches(newCars);
     console.log(`Delta sync fullført. Oppdatert ${newCars.length} biler.`);
 
@@ -838,6 +867,89 @@ async function runScraper() {
     await runAnalyzer();
   } catch (error) {
     console.error('Scraper error:', error);
+  }
+}
+
+/**
+ * Sammenligner skrapte priser mot eksisterende Firestore-priser og lagrer endringer i price_history.
+ * Leser kun biler som faktisk finnes fra før (isComplete=true) for å begrense antall lesinger.
+ */
+async function recordPriceChanges(scrapedCars: Record<string, unknown>[]): Promise<void> {
+  if (scrapedCars.length === 0) return;
+  try {
+    const changedAt = new Date().toISOString();
+    // Hent eksisterende priser i batches (Firestore 'in' maks 30 per kall)
+    const CHUNK = 30;
+    const priceHistory: Array<{ finnId: string; oldPrice: number; newPrice: number }> = [];
+
+    for (let i = 0; i < scrapedCars.length; i += CHUNK) {
+      const chunk = scrapedCars.slice(i, i + CHUNK);
+      const finnIds = chunk.map(c => String(c.finnId)).filter(Boolean);
+      if (finnIds.length === 0) continue;
+
+      try {
+        if (adminFirestore) {
+          const snap = await adminFirestore
+            .collection('cars')
+            .where('finnId', 'in', finnIds)
+            .select('finnId', 'price')
+            .get();
+          for (const d of snap.docs) {
+            const existing = d.data();
+            const scraped = chunk.find(c => String(c.finnId) === String(existing.finnId));
+            if (!scraped) continue;
+            const oldPrice = Number(existing.price);
+            const newPrice = Number(scraped.price);
+            if (oldPrice > 0 && newPrice > 0 && oldPrice !== newPrice) {
+              priceHistory.push({ finnId: String(existing.finnId), oldPrice, newPrice });
+            }
+          }
+        } else {
+          const snap = await getDocs(query(collection(db, 'cars'), where('finnId', 'in', finnIds)));
+          for (const d of snap.docs) {
+            const existing = d.data();
+            const scraped = chunk.find(c => String(c.finnId) === String(existing.finnId));
+            if (!scraped) continue;
+            const oldPrice = Number(existing.price);
+            const newPrice = Number(scraped.price);
+            if (oldPrice > 0 && newPrice > 0 && oldPrice !== newPrice) {
+              priceHistory.push({ finnId: String(existing.finnId), oldPrice, newPrice });
+            }
+          }
+        }
+      } catch {
+        // Ignorer feil per chunk — ikke kritisk
+      }
+    }
+
+    if (priceHistory.length === 0) {
+      console.log('Prisendringer: ingen endringer oppdaget.');
+      return;
+    }
+    console.log(`Prisendringer: ${priceHistory.length} biler med endret pris — lagrer til price_history.`);
+
+    // Skriv alle endringer til price_history
+    const BATCH_SIZE = 400;
+    for (let i = 0; i < priceHistory.length; i += BATCH_SIZE) {
+      const chunk = priceHistory.slice(i, i + BATCH_SIZE);
+      if (adminFirestore) {
+        const batch = adminFirestore.batch();
+        for (const entry of chunk) {
+          const ref = adminFirestore.collection('price_history').doc();
+          batch.set(ref, { ...entry, changedAt });
+        }
+        await batch.commit();
+      } else {
+        const batch = writeBatch(db);
+        for (const entry of chunk) {
+          const ref = doc(collection(db, 'price_history'));
+          batch.set(ref, { ...entry, changedAt });
+        }
+        await batch.commit();
+      }
+    }
+  } catch (e) {
+    console.error('recordPriceChanges feil:', e);
   }
 }
 
@@ -870,10 +982,65 @@ async function recordScanCompleted() {
 }
 
 async function runWeeklyArchiveSync() {
-  console.log('Starting Weekly Archive Sync...');
-  // Logic to fetch all active IDs and diff against our DB to mark as 'archived'
-  // For prototype, we will just log it.
-  console.log('Archive sync complete.');
+  console.log('Starting Weekly Archive Sync…');
+  if (!firestoreBackendReady()) {
+    console.error('Archive sync stoppet: ingen Firestore-backend.');
+    return;
+  }
+  try {
+    // 1. Hent alle aktive finnId-er fra Firestore
+    let activeFinnIds: Set<string>;
+    if (adminFirestore) {
+      const snap = await adminFirestore.collection('cars').where('status', '==', 'active').select('finnId').get();
+      activeFinnIds = new Set(snap.docs.map((d: AdminQueryDoc) => String(d.data().finnId)).filter(Boolean));
+    } else {
+      const snap = await getDocs(query(collection(db, 'cars'), where('status', '==', 'active')));
+      activeFinnIds = new Set(snap.docs.map((d: { data: () => Record<string, unknown> }) => String(d.data().finnId)).filter(Boolean));
+    }
+    console.log(`Archive sync: ${activeFinnIds.size} aktive biler i Firestore.`);
+
+    // 2. Hent alle nåværende annonser fra Finn.no (søkesider, ingen dybdeskraping)
+    const summaries = await collectAllListingSummaries(finnSearchUrl());
+    const liveFinnIds = new Set(summaries.map(s => s.finnId));
+    console.log(`Archive sync: ${liveFinnIds.size} live annonser på Finn.no.`);
+
+    // 3. Finn biler i Firestore som ikke lenger er aktive på Finn.no
+    const toArchive = [...activeFinnIds].filter(id => !liveFinnIds.has(id));
+    console.log(`Archive sync: ${toArchive.length} biler skal markeres som arkivert.`);
+
+    if (toArchive.length === 0) {
+      console.log('Archive sync complete — ingen endringer.');
+      return;
+    }
+
+    // 4. Marker de fjernede som 'archived' i Firestore
+    const BATCH_SIZE = 400;
+    const archivedAt = new Date().toISOString();
+    for (let i = 0; i < toArchive.length; i += BATCH_SIZE) {
+      const chunk = toArchive.slice(i, i + BATCH_SIZE);
+      if (adminFirestore) {
+        const batch = adminFirestore.batch();
+        for (const finnId of chunk) {
+          batch.set(
+            adminFirestore.collection('cars').doc(finnId),
+            { status: 'archived', archivedAt },
+            { merge: true },
+          );
+        }
+        await batch.commit();
+      } else {
+        const batch = writeBatch(db);
+        for (const finnId of chunk) {
+          batch.set(doc(db, 'cars', finnId), { status: 'archived', archivedAt }, { merge: true });
+        }
+        await batch.commit();
+      }
+      console.log(`Archive sync: batch ${Math.floor(i / BATCH_SIZE) + 1} — ${chunk.length} biler arkivert.`);
+    }
+    console.log(`Archive sync complete. ${toArchive.length} biler markert som arkivert.`);
+  } catch (error) {
+    console.error('Archive sync feil:', error);
+  }
 }
 
 async function runAnalyzer() {
@@ -882,15 +1049,15 @@ async function runAnalyzer() {
     let cars: DocumentData[];
     if (adminFirestore) {
       const snap = await adminFirestore.collection('cars').where('isAuction', '==', false).get();
-      cars = snap.docs.map(d => d.data());
+      cars = snap.docs.map((d: AdminQueryDoc) => d.data());
     } else {
       const carsSnapshot = await getDocs(query(collection(db, 'cars'), where('isAuction', '==', false)));
-      cars = carsSnapshot.docs.map(d => d.data());
+      cars = carsSnapshot.docs.map((d: { data: () => DocumentData }) => d.data());
     }
     
     // Group by model and year — year=0 betyr manglende data, hopp over for fairPrice
-    const groups: Record<string, any[]> = {};
-    cars.forEach(car => {
+    const groups: Record<string, DocumentData[]> = {};
+    cars.forEach((car: DocumentData) => {
       if (!car.year || car.year === 0) return; // Ikke grupper biler uten årsdata
       const key = `${car.brand}_${car.model}_${car.year}`;
       if (!groups[key]) groups[key] = [];
@@ -900,15 +1067,17 @@ async function runAnalyzer() {
     for (const [key, group] of Object.entries(groups)) {
       if (group.length < 3) continue; // Minst 3 biler for meningsfull statistikk
       
-      // Sort by price to remove top/bottom 2% (simplified for prototype)
-      group.sort((a, b) => a.price - b.price);
+      // Sort by price, then trim top and bottom 2% outliers for a cleaner distribution
+      group.sort((a: DocumentData, b: DocumentData) => a.price - b.price);
+      const trimCount = Math.max(0, Math.floor(group.length * 0.02));
+      const trimmed = trimCount > 0 ? group.slice(trimCount, group.length - trimCount) : group;
       
       // WEIGHTED AVERAGE CALCULATION
       // Archived (Sold) cars get weight 2, Active cars get weight 1
       let totalPrivatePrice = 0, totalPrivateWeight = 0;
       let totalDealerPrice = 0, totalDealerWeight = 0;
 
-      group.forEach(c => {
+      group.forEach((c: DocumentData) => {
         const weight = c.status === 'archived' ? 2 : 1;
         if (c.sellerType === 'privat') {
           totalPrivatePrice += c.price * weight;
@@ -921,7 +1090,11 @@ async function runAnalyzer() {
       
       const avgPrivate = totalPrivateWeight > 0 ? totalPrivatePrice / totalPrivateWeight : 0;
       const avgDealer = totalDealerWeight > 0 ? totalDealerPrice / totalDealerWeight : 0;
-      const median = group[Math.floor(group.length / 2)].price;
+      // Median from the trimmed array for outlier resistance; fall back to full group if trim removed everything
+      const medianSource = trimmed.length > 0 ? trimmed : group;
+      const medianItem = medianSource[Math.floor(medianSource.length / 2)];
+      if (!medianItem) continue; // skip group if no data remains
+      const median = medianItem.price as number;
       const avgPrice =
         avgPrivate > 0 && avgDealer > 0
           ? (avgPrivate + avgDealer) / 2
@@ -1071,11 +1244,11 @@ async function startServer() {
 
   expressApp.use(express.json({ limit: '1mb' }));
 
-  expressApp.get('/api/health', (_req, res) => {
+  expressApp.get('/api/health', (_req: express.Request, res: express.Response) => {
     res.json({ status: 'ok' });
   });
 
-  const triggerScraperHandler: express.RequestHandler = async (req, res) => {
+  const triggerScraperHandler: express.RequestHandler = async (req: express.Request, res: express.Response) => {
     if (!scanRequestAuthorized(req)) {
       res.status(401).json({ error: 'Ugyldig eller manglende x-scan-secret.' });
       return;
@@ -1101,9 +1274,11 @@ async function startServer() {
     expressApp.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    // Pre-compute the SPA entry point path — it is never user-controlled
+    const indexHtmlPath = path.join(distPath, 'index.html');
     expressApp.use(express.static(distPath));
-    expressApp.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    expressApp.get('*', (_req: express.Request, res: express.Response) => {
+      res.sendFile(indexHtmlPath);
     });
   }
 

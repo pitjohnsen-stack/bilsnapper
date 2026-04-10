@@ -12,6 +12,16 @@ interface ImportMetaEnv {
   readonly VITE_SCANNER_URL?: string;
   /** Optional; must match SCAN_SECRET on Cloud Run if set */
   readonly VITE_SCAN_SECRET?: string;
+  /** Optional GitHub token for fetching scanner workflow status */
+  readonly VITE_GITHUB_TOKEN?: string;
+  /** Set by Vite: 'development' | 'production' | 'test' */
+  readonly MODE: string;
+  /** True when running in development mode */
+  readonly DEV: boolean;
+  /** True when running in production mode */
+  readonly PROD: boolean;
+  /** True when running in SSR mode */
+  readonly SSR: boolean;
 }
 
 interface ImportMeta {
