@@ -87,10 +87,15 @@ function scanRequestAuthorized(req: express.Request): boolean {
   const secret = process.env.SCAN_SECRET?.trim();
   if (!secret) {
     if (!scanSecretWarned) {
-      console.warn('⚠️ SCAN_SECRET er ikke satt — POST /scan er åpen. Sett SCAN_SECRET i produksjon.');
       scanSecretWarned = true;
+      if (process.env.NODE_ENV === 'production') {
+        console.error('❌ SCAN_SECRET er ikke satt i produksjon — /scan avvises. Sett SCAN_SECRET i miljøet.');
+      } else {
+        console.warn('⚠️ SCAN_SECRET er ikke satt — POST /scan er åpen i dev. Sett SCAN_SECRET i produksjon.');
+      }
     }
-    return true;
+    // In production, deny when secret is missing. In dev, allow for convenience.
+    return process.env.NODE_ENV !== 'production';
   }
   return req.headers['x-scan-secret'] === secret;
 }
@@ -113,13 +118,12 @@ async function authenticateBackend(): Promise<boolean> {
     );
     return false;
   }
-  const allowedInRules =
-    email === 'pit.johnsen@gmail.com' || email === 'scraper@bruktbil.no';
-  if (!allowedInRules) {
-    console.warn(
-      `⚠️ SCRAPER_EMAIL er «${email}», men firestore.rules krever pit.johnsen@gmail.com eller scraper@bruktbil.no — oppdater .env eller reglene.`,
-    );
-  }
+  // firestore.rules krever at brukeren har custom claim admin==true
+  // ELLER et dokument i admins/{uid}. Anbefalt: bruk service account (Admin SDK)
+  // som uansett omgår rules. Ved client-SDK-auth: bootstrap admins/{uid} via Firebase Console.
+  console.log(
+    `ℹ️ Scraper logger inn som «${email}». Brukeren må ha et admins/{uid}-dokument eller custom claim admin==true for å kunne skrive til Firestore.`,
+  );
   try {
     await signInWithEmailAndPassword(auth, email, password);
     console.log('✅ Backend authenticated successfully.');
@@ -870,11 +874,87 @@ async function recordScanCompleted() {
   }
 }
 
+/**
+ * Marker aktive biler som «archived» når `lastSeen` er eldre enn terskelen.
+ * Scraperen kjører hver 2. time og oppdaterer lastSeen — manglende oppdatering
+ * i X dager tyder på at annonsen er fjernet/solgt.
+ * Konfigureres med ARCHIVE_STALE_DAYS (default 7).
+ */
 async function runWeeklyArchiveSync() {
   console.log('Starting Weekly Archive Sync...');
-  // Logic to fetch all active IDs and diff against our DB to mark as 'archived'
-  // For prototype, we will just log it.
-  console.log('Archive sync complete.');
+  if (!firestoreBackendReady()) {
+    console.warn('Archive sync hoppet over: ingen Firestore-backend tilgjengelig.');
+    return;
+  }
+  const staleDays = Math.max(1, parseInt(process.env.ARCHIVE_STALE_DAYS || '7', 10) || 7);
+  const cutoffMs = Date.now() - staleDays * 24 * 60 * 60 * 1000;
+  const cutoffIso = new Date(cutoffMs).toISOString();
+  const nowIso = new Date().toISOString();
+
+  try {
+    type ArchiveCandidate = { id: string; lastSeen: unknown };
+    const candidates: ArchiveCandidate[] = [];
+
+    if (adminFirestore) {
+      const snap = await adminFirestore
+        .collection('cars')
+        .where('status', '==', 'active')
+        .select('lastSeen')
+        .get();
+      snap.docs.forEach(d => candidates.push({ id: d.id, lastSeen: d.data().lastSeen }));
+    } else {
+      const snap = await getDocs(query(collection(db, 'cars'), where('status', '==', 'active')));
+      snap.docs.forEach(d => candidates.push({ id: d.id, lastSeen: d.data().lastSeen }));
+    }
+
+    const stale = candidates.filter(c => {
+      if (typeof c.lastSeen !== 'string' || !c.lastSeen) return false;
+      const t = Date.parse(c.lastSeen);
+      return Number.isFinite(t) && t < cutoffMs;
+    });
+
+    console.log(
+      `Archive sync: ${candidates.length} aktive biler, ${stale.length} ikke sett siden ${cutoffIso} (${staleDays} dager).`,
+    );
+    if (stale.length === 0) {
+      console.log('Archive sync complete.');
+      return;
+    }
+
+    const BATCH = 400;
+    if (adminFirestore) {
+      for (let i = 0; i < stale.length; i += BATCH) {
+        const chunk = stale.slice(i, i + BATCH);
+        const batch = adminFirestore.batch();
+        for (const c of chunk) {
+          batch.set(
+            adminFirestore.collection('cars').doc(c.id),
+            { status: 'archived', archivedAt: nowIso },
+            { merge: true },
+          );
+        }
+        await batch.commit();
+        console.log(`Archive (Admin): batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
+      }
+    } else {
+      for (let i = 0; i < stale.length; i += BATCH) {
+        const chunk = stale.slice(i, i + BATCH);
+        const batch = writeBatch(db);
+        for (const c of chunk) {
+          batch.set(
+            doc(db, 'cars', c.id),
+            { status: 'archived', archivedAt: nowIso },
+            { merge: true },
+          );
+        }
+        await batch.commit();
+        console.log(`Archive: batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
+      }
+    }
+    console.log(`Archive sync complete. ${stale.length} biler markert som archived.`);
+  } catch (e) {
+    console.error('Archive sync feilet:', e);
+  }
 }
 
 async function runAnalyzer() {
@@ -1096,6 +1176,50 @@ async function startServer() {
   /** Frontend (VITE_SCANNER_URL) forventer POST /scan — samme som /api/trigger-scraper */
   expressApp.post('/scan', triggerScraperHandler);
   expressApp.post('/api/trigger-scraper', triggerScraperHandler);
+
+  /**
+   * Proxy for GitHub Actions workflow_dispatch. Holder GITHUB_TOKEN server-side
+   * i stedet for å eksponere VITE_GITHUB_TOKEN i frontend-bundlen.
+   * Krever samme x-scan-secret som /scan.
+   */
+  expressApp.post('/api/trigger-github-scrape', async (req, res) => {
+    if (!scanRequestAuthorized(req)) {
+      res.status(401).json({ error: 'Ugyldig eller manglende x-scan-secret.' });
+      return;
+    }
+    const token = process.env.GITHUB_TOKEN?.trim();
+    if (!token) {
+      res.status(503).json({ error: 'GITHUB_TOKEN er ikke satt på serveren.' });
+      return;
+    }
+    const repo = process.env.GITHUB_REPO?.trim() || 'pitjohnsen-stack/bilsnapper';
+    const workflow = process.env.GITHUB_WORKFLOW_FILE?.trim() || 'scraper.yml';
+    const ref = process.env.GITHUB_WORKFLOW_REF?.trim() || 'main';
+    try {
+      const ghRes = await fetch(
+        `https://api.github.com/repos/${repo}/actions/workflows/${workflow}/dispatches`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'bilsnapper-server',
+          },
+          body: JSON.stringify({ ref }),
+        },
+      );
+      if (!ghRes.ok) {
+        const text = await ghRes.text();
+        res.status(502).json({ error: `GitHub API ${ghRes.status}: ${text.slice(0, 300)}` });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('GitHub dispatch feilet:', e);
+      res.status(500).json({ error: 'Kunne ikke kalle GitHub API.' });
+    }
+  });
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

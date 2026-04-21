@@ -72,8 +72,17 @@ service cloud.firestore {
     // Since the scraper runs on the server, we can use a secret API key or just allow writes from a specific admin user.
     // Let's bootstrap the user email as admin.
 
+    // Admin-tilgang gis på to måter (ingen hardkodede e-poster):
+    //  1) Custom claim: sett request.auth.token.admin == true via Admin SDK
+    //     (Firebase CLI / Cloud Function). Foretrukket — ingen ekstra doc-read.
+    //  2) Dokument i admins/{uid}. Opprett dokumentet via Firebase Console
+    //     (bypasser rules) for å bootstrappe første admin.
+    // Scraperen bruker service account (Admin SDK) som uansett omgår rules.
     function isAdmin() {
-      return isAuthenticated() && (request.auth.token.email == "pit.johnsen@gmail.com" || request.auth.token.email == "scraper@bruktbil.no");
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
     }
 
     match /cars/{carId} {
@@ -109,6 +118,14 @@ service cloud.firestore {
     // Brukerpreferanser (dashboard): kun eieren av dokumentet
     match /user_settings/{userId} {
       allow read, create, update, delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Admin-register: brukere med dokument i admins/ får isAdmin()-rettigheter.
+    // Første admin bootstrappes via Firebase Console (som bypasser rules).
+    // Deretter kan eksisterende admin legge til nye.
+    match /admins/{uid} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
     }
   }
 }

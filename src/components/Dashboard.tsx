@@ -171,26 +171,28 @@ export default function Dashboard({
         showToast('ok', 'Scan er startet. Firestore oppdateres om noen minutter.');
         return;
       }
-      const ghToken = import.meta.env.VITE_GITHUB_TOKEN;
-      if (!ghToken) {
+      // GitHub Actions dispatch går via server-side proxy (/api/trigger-github-scrape)
+      // slik at GITHUB_TOKEN ikke eksponeres i frontend-bundlen.
+      const sameOriginBase = typeof window !== 'undefined' ? window.location.origin : '';
+      if (!sameOriginBase) {
         showToast('error', 'Ingen scan-server konfigurert. Scraperen kjører automatisk hvert 6. time.');
         return;
       }
-      const res = await fetch(
-        'https://api.github.com/repos/pitjohnsen-stack/bilsnapper/actions/workflows/scraper.yml/dispatches',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${ghToken}`,
-            Accept: 'application/vnd.github.v3+json',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ ref: 'main' }),
-        },
-      );
+      const proxyHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      const proxySecret = import.meta.env.VITE_SCAN_SECRET;
+      if (proxySecret) proxyHeaders['x-scan-secret'] = proxySecret;
+      const res = await fetch(`${sameOriginBase}/api/trigger-github-scrape`, {
+        method: 'POST',
+        headers: proxyHeaders,
+        body: '{}',
+      });
       if (!res.ok) {
         const t = await res.text();
-        throw new Error(t || `GitHub API HTTP ${res.status}`);
+        if (res.status === 503) {
+          showToast('error', 'Ingen scan-server konfigurert. Scraperen kjører automatisk hvert 6. time.');
+          return;
+        }
+        throw new Error(t || `Proxy HTTP ${res.status}`);
       }
       showToast('ok', 'Scan startet via GitHub Actions — resultater om ca. 5–15 min.');
     } catch (e) {
