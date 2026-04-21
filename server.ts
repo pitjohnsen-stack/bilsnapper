@@ -473,7 +473,7 @@ function summaryToCarRecord(s: ListingSummary) {
     fuel: s.fuel ?? 'Ukjent',
     color: s.color ?? 'Ukjent',
     equipmentLevel: 'Standard',
-    owners: s.owners ?? 1,
+    owners: s.owners ?? null,
     euApprovedUntil: 'Ukjent',
     sellerType: s.sellerType ?? 'forhandler',
     sellerName: 'Ukjent',
@@ -638,7 +638,7 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
   let gearbox = 'Ukjent';
   let fuel = 'Ukjent';
   let color = 'Ukjent';
-  let owners = 1;
+  let owners: number | null = null;
 
   let region = 'Ukjent';
   let municipality = 'Ukjent';
@@ -660,7 +660,8 @@ async function deepScrapeSingleAd(adUrl: string): Promise<Record<string, unknown
     if (label === 'Drivstoff') fuel = value;
     if (label === 'Farge') color = value;
     if (label === 'Eiere' || label === 'Antall eiere' || label === 'Antall tidligere eiere') {
-      owners = parseInt(value.replace(/[^0-9]/g, ''), 10) || 1;
+      const n = parseInt(value.replace(/[^0-9]/g, ''), 10);
+      if (!Number.isNaN(n) && n > 0) owners = n;
     }
     if (label === 'Bilen står i' || label === 'Fylke' || label === 'Region') region = value;
     if (label === 'Kommune' || label === 'Sted') municipality = value;
@@ -921,7 +922,10 @@ async function runAnalyzer() {
       
       const avgPrivate = totalPrivateWeight > 0 ? totalPrivatePrice / totalPrivateWeight : 0;
       const avgDealer = totalDealerWeight > 0 ? totalDealerPrice / totalDealerWeight : 0;
-      const median = group[Math.floor(group.length / 2)].price;
+      const mid = Math.floor(group.length / 2);
+      const median = group.length % 2 === 1
+        ? group[mid].price
+        : (group[mid - 1].price + group[mid].price) / 2;
       const avgPrice =
         avgPrivate > 0 && avgDealer > 0
           ? (avgPrivate + avgDealer) / 2

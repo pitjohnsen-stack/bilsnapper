@@ -98,6 +98,7 @@ export default function Dashboard({
   const [loading, setLoading] = useState(true);
   const [lastScanLabel, setLastScanLabel] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'oversikt' | 'historikk'>('oversikt');
+  const [scanning, setScanning] = useState(false);
 
   const [brandFilter, setBrandFilter] = useState<string>('all');
   const [regionFilter, setRegionFilter] = useState<string>('all');
@@ -111,7 +112,7 @@ export default function Dashboard({
       setStats(statsData);
     });
 
-    const qCars = query(collection(db, 'cars'), where('status', '==', 'active'), where('isAuction', '==', false));
+    const qCars = query(collection(db, 'cars'), where('status', '==', 'active'), where('isAuction', '==', false), limit(1000));
     const unsubCar = onSnapshot(qCars, (snapshot) => {
       const carsData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setDeals(carsData);
@@ -127,7 +128,7 @@ export default function Dashboard({
   useEffect(() => {
     const ref = doc(db, 'scans', 'latest');
     return onSnapshot(ref, (snap) => {
-      if (!snap.exists) {
+      if (!snap.exists()) {
         setLastScanLabel(null);
         return;
       }
@@ -141,7 +142,16 @@ export default function Dashboard({
     });
   }, []);
 
+  const [scanToast, setScanToast] = useState<{ type: 'ok' | 'error'; msg: string } | null>(null);
+
+  const showToast = (type: 'ok' | 'error', msg: string) => {
+    setScanToast({ type, msg });
+    setTimeout(() => setScanToast(null), 6000);
+  };
+
   const triggerScraper = async () => {
+    if (scanning) return;
+    setScanning(true);
     const configured = (import.meta.env.VITE_SCANNER_URL || '').trim().replace(/\/$/, '');
     const base =
       configured ||
@@ -158,14 +168,12 @@ export default function Dashboard({
           const t = await res.text();
           throw new Error(t || `HTTP ${res.status}`);
         }
-        alert('Scan er startet på serveren. Oppdatering i Firestore kan ta flere minutter.');
+        showToast('ok', 'Scan er startet. Firestore oppdateres om noen minutter.');
         return;
       }
       const ghToken = import.meta.env.VITE_GITHUB_TOKEN;
       if (!ghToken) {
-        alert(
-          'Sett VITE_SCANNER_URL (f.eks. Cloud Run), eller kjør appen lokalt i dev (bruker da denne adressen), eller VITE_GITHUB_TOKEN for å trigge GitHub Actions. Scraperen kan også kjøre på timeplan via Actions.',
-        );
+        showToast('error', 'Ingen scan-server konfigurert. Scraperen kjører automatisk hvert 6. time.');
         return;
       }
       const res = await fetch(
@@ -184,10 +192,12 @@ export default function Dashboard({
         const t = await res.text();
         throw new Error(t || `GitHub API HTTP ${res.status}`);
       }
-      alert('Scan er startet via GitHub Actions. Resultater oppdateres i Firestore om ca. 5–15 minutter.');
+      showToast('ok', 'Scan startet via GitHub Actions — resultater om ca. 5–15 min.');
     } catch (e) {
       console.error(e);
-      alert(e instanceof Error ? e.message : 'Kunne ikke starte scan.');
+      showToast('error', e instanceof Error ? e.message : 'Kunne ikke starte scan.');
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -260,6 +270,8 @@ export default function Dashboard({
       })),
     [filteredDeals],
   );
+
+  const reversedStats = useMemo(() => stats.slice().reverse(), [stats]);
 
   if (loading) {
     return <DashboardSkeleton isDarkMode={isDarkMode} />;
@@ -348,9 +360,17 @@ export default function Dashboard({
           <button
             type="button"
             onClick={triggerScraper}
-            className="rounded-xl bg-gradient-to-r from-teal-600 to-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-teal-900/25 transition hover:from-teal-500 hover:to-teal-600"
+            disabled={scanning}
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-teal-600 to-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-teal-900/25 transition hover:from-teal-500 hover:to-teal-600 disabled:opacity-60"
           >
-            Kjør scan
+            {scanning ? (
+              <>
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                Starter…
+              </>
+            ) : (
+              'Kjør scan'
+            )}
           </button>
           <button
             type="button"
@@ -364,8 +384,8 @@ export default function Dashboard({
             className={
               matchingDeals.length === 0
                 ? isDarkMode
-                  ? 'cursor-not-allowed rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-2.5 text-sm font-medium text-slate-500'
-                  : 'cursor-not-allowed rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-400'
+                  ? 'flex cursor-not-allowed items-center gap-2 rounded-xl border border-slate-600 bg-slate-800/50 px-4 py-2.5 text-sm font-medium text-slate-500'
+                  : 'flex cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-400'
                 : isDarkMode
                   ? 'flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:bg-slate-700'
                   : 'flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50'
@@ -376,6 +396,19 @@ export default function Dashboard({
           </button>
         </div>
       </div>
+
+      {scanToast && (
+        <div
+          className={
+            scanToast.type === 'ok'
+              ? 'rounded-xl border border-teal-500/30 bg-teal-950/30 px-4 py-3 text-sm text-teal-100 dark:text-teal-200'
+              : 'rounded-xl border border-red-500/30 bg-red-950/30 px-4 py-3 text-sm text-red-200'
+          }
+          role="status"
+        >
+          {scanToast.msg}
+        </div>
+      )}
 
       <p
         className={
@@ -729,7 +762,7 @@ export default function Dashboard({
 
           <div className="h-96 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={stats.slice().reverse()} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <LineChart data={reversedStats} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
                 <XAxis
                   dataKey="calculatedAt"

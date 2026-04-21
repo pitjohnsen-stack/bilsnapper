@@ -45,7 +45,7 @@ export default function App() {
     const unsubscribe = onSnapshot(
       ref,
       (snap) => {
-        setRawUserSettings(snap.exists ? (snap.data() as Partial<UserSettings>) : {});
+        setRawUserSettings(snap.exists() ? (snap.data() as Partial<UserSettings>) : {});
       },
       (err) => {
         console.error('user_settings lytting feilet:', err);
@@ -229,12 +229,15 @@ export default function App() {
             </button>
             <button
               type="button"
+              title="Varsler kommer snart"
               className={
                 isDarkMode
-                  ? 'rounded-full p-2.5 text-slate-400 transition hover:bg-white/5 hover:text-white'
-                  : 'rounded-full p-2.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800'
+                  ? 'cursor-default rounded-full p-2.5 text-slate-600 opacity-40'
+                  : 'cursor-default rounded-full p-2.5 text-slate-300 opacity-60'
               }
-              aria-label="Varsler (kommer)"
+              aria-label="Varsler (kommer snart)"
+              aria-disabled="true"
+              tabIndex={-1}
             >
               <Bell size={20} />
             </button>
