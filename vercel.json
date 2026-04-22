@@ -1,3 +1,6 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/scan", "destination": "/api/scan" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
 }

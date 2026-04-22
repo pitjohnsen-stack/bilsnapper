@@ -1,15 +1,14 @@
-name: Run Scraper
+name: Scraper
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'   # Every 6 hours (full shard run takes ~45 min)
-  workflow_dispatch:          # Manual trigger from GitHub UI or dashboard button
+    - cron: '0 */2 * * *'
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -18,32 +17,10 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Run scraper (one-shot, year-shard mode)
+      - name: Kjør scraper
         env:
-          SCRAPER_EMAIL: ${{ secrets.SCRAPER_EMAIL }}
-          SCRAPER_PASSWORD: ${{ secrets.SCRAPER_PASSWORD }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
-          FINN_SHARD_MODE: 'year'          # 8 year-based shards → covers all 50k+ cars
-          FINN_MAX_SEARCH_PAGES: '60'      # 60 pages × 48 results = ~2880 per shard
-          FINN_PAGE_DELAY_MS: '2000'       # 2s delay between pages (polite scraping)
-          FINN_DEEP_SCRAPE_MAX: '300'      # Deep scrape 300 NEW cars per run (incremental)
-          RUN_SCRAPER_ON_START: 'true'
-          NODE_ENV: 'production'
-          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
-          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
-          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
-          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-          VITE_FIRESTORE_DATABASE_ID: ${{ secrets.VITE_FIRESTORE_DATABASE_ID }}
-        run: |
-          # Run scraper and wait up to 80 minutes for completion
-          timeout 80m npx tsx server.ts &
-          PID=$!
-          while kill -0 $PID 2>/dev/null; do
-            sleep 15
-          done
-          echo "Scraper process exited."
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          SCRAPE_ONCE: '1'
+        run: npm run scrape
