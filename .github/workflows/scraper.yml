@@ -8,7 +8,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -23,4 +23,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           SCRAPE_ONCE: '1'
+          FINN_SHARD_MODE: 'year'
+          FINN_MAX_SEARCH_PAGES: '200'
+          FINN_PAGE_DELAY_MS: '1000'
         run: npm run scrape
