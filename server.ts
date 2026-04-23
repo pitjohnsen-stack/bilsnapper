@@ -165,22 +165,36 @@ const DEFAULT_FINN_CAR_SEARCH =
 const finnSearchUrl = () =>
   process.env.FINN_CAR_SEARCH_URL?.trim() || DEFAULT_FINN_CAR_SEARCH;
 
+// --- Getaround eligibility constants ---
+const GETAROUND_MAX_AGE_YEARS = 15;
+const GETAROUND_MAX_KM = 200_000;
+const GETAROUND_EXCLUDED_BRANDS = new Set([
+  'Ferrari', 'Porsche', 'Lamborghini', 'Maserati', 'Bentley',
+  'Rolls-Royce', 'Aston Martin', 'McLaren', 'Bugatti', 'Lotus',
+]);
+const GETAROUND_MIN_YEAR = new Date().getFullYear() - GETAROUND_MAX_AGE_YEARS;
+
+function isGetaroundEligible(s: ListingSummary): boolean {
+  if (s.year && s.year < GETAROUND_MIN_YEAR) return false;
+  if (s.mileage != null && s.mileage >= GETAROUND_MAX_KM) return false;
+  if (GETAROUND_EXCLUDED_BRANDS.has(s.brand)) return false;
+  return true;
+}
+
 /**
- * Genererer årsbaserte shard-URLer som til sammen dekker alle biler på finn.no.
- * Hvert shard dekker et årsintervall, slik at hvert enkelt søk har <2500 treff
- * og vi unngår rate-limiting/blokkering.
+ * Genererer årsbaserte shard-URLer for Getaround-egnede biler (2011+).
+ * Hvert shard dekker et årsintervall slik at hvert søk har <2500 treff.
  */
 function generateYearShardUrls(): string[] {
   const base = DEFAULT_FINN_CAR_SEARCH;
+  const minYear = String(GETAROUND_MIN_YEAR);
   const shards: Array<{ year_from?: string; year_to?: string }> = [
-    { year_to: '2007' },
-    { year_from: '2008', year_to: '2011' },
-    { year_from: '2012', year_to: '2014' },
-    { year_from: '2015', year_to: '2017' },
-    { year_from: '2018', year_to: '2019' },
-    { year_from: '2020', year_to: '2021' },
-    { year_from: '2022', year_to: '2023' },
-    { year_from: '2024' },
+    { year_from: minYear, year_to: String(GETAROUND_MIN_YEAR + 2) },
+    { year_from: String(GETAROUND_MIN_YEAR + 3), year_to: String(GETAROUND_MIN_YEAR + 5) },
+    { year_from: String(GETAROUND_MIN_YEAR + 6), year_to: String(GETAROUND_MIN_YEAR + 7) },
+    { year_from: String(GETAROUND_MIN_YEAR + 8), year_to: String(GETAROUND_MIN_YEAR + 9) },
+    { year_from: String(GETAROUND_MIN_YEAR + 10), year_to: String(GETAROUND_MIN_YEAR + 11) },
+    { year_from: String(GETAROUND_MIN_YEAR + 12) },
   ];
   return shards.map(params => {
     const url = new URL(base);
@@ -492,17 +506,58 @@ function summaryToCarRecord(s: ListingSummary) {
   };
 }
 
-async function fetchFinnSearchHtml(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'nb-NO,nb;q=0.9,no;q=0.8,en-US;q=0.7,en;q=0.6',
-    },
-  });
-  if (!response.ok) throw new Error(`Finn.no returned status: ${response.status}`);
-  return response.text();
+const BROWSER_USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
+];
+
+function randomUserAgent(): string {
+  return BROWSER_USER_AGENTS[Math.floor(Math.random() * BROWSER_USER_AGENTS.length)];
+}
+
+function jitter(baseMs: number): number {
+  return baseMs + Math.floor(Math.random() * baseMs * 0.5);
+}
+
+async function fetchFinnSearchHtml(url: string, referer?: string): Promise<string> {
+  const headers: Record<string, string> = {
+    'User-Agent': randomUserAgent(),
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'nb-NO,nb;q=0.9,no;q=0.8,en-US;q=0.7,en;q=0.6',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': referer ? 'same-origin' : 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+  };
+  if (referer) headers['Referer'] = referer;
+
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, { headers });
+      if (response.status === 429) {
+        const wait = jitter(15_000 * attempt);
+        console.warn(`429 Rate limited — venter ${Math.round(wait / 1000)}s (forsøk ${attempt}/${MAX_RETRIES})…`);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      if (!response.ok) throw new Error(`Finn.no svarte ${response.status}`);
+      return response.text();
+    } catch (err) {
+      if (attempt === MAX_RETRIES) throw err;
+      const wait = jitter(3_000 * attempt);
+      console.warn(`Fetch feilet (forsøk ${attempt}/${MAX_RETRIES}), venter ${Math.round(wait / 1000)}s: ${err}`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw new Error('fetchFinnSearchHtml: alle forsøk feilet');
 }
 
 /** Henter alle unike treff ved å bla `page=` til ingen nye annonser kommer. */
@@ -515,18 +570,28 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
   let consecutiveNoNew = 0;
   const maxConsecutiveNoNew = Math.max(3, parseInt(process.env.FINN_MAX_EMPTY_PAGES || '6', 10) || 6);
 
+  let prevPageUrl: string | undefined;
+
   for (let page = 1; page <= maxPages; page++) {
     const pageUrl = new URL(baseSearchUrl);
     if (page > 1) pageUrl.searchParams.set('page', String(page));
+    const pageUrlStr = pageUrl.toString();
 
     console.log(`Søkeside ${page}/${maxPages}…`);
-    const html = await fetchFinnSearchHtml(pageUrl.toString());
-    const summaries = extractListingSummariesFromSeoHtml(html);
 
-    if (summaries.length === 0) {
-      console.log(`Ingen parsbare treff på side ${page}, stopper paginering.`);
-      break;
+    let summaries: ListingSummary[] = [];
+    try {
+      const html = await fetchFinnSearchHtml(pageUrlStr, prevPageUrl);
+      summaries = extractListingSummariesFromSeoHtml(html);
+    } catch (err) {
+      console.warn(`Side ${page} feilet etter alle retries: ${err}. Hopper over.`);
+      consecutiveNoNew++;
+      if (consecutiveNoNew >= maxConsecutiveNoNew) break;
+      if (delayMs > 0) await new Promise(r => setTimeout(r, jitter(delayMs)));
+      continue;
     }
+
+    prevPageUrl = pageUrlStr;
 
     let added = 0;
     for (const s of summaries) {
@@ -536,21 +601,26 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
       added++;
     }
 
-    console.log(`  +${added} nye (total ${all.length} unike)`);
-    if (added === 0) {
+    if (summaries.length === 0) {
+      // Finn returnerte ingen parsbar data — mulig bot-blokkering eller siste side
       consecutiveNoNew++;
-      if (consecutiveNoNew >= maxConsecutiveNoNew) {
-        console.log(
-          `${maxConsecutiveNoNew} sider på rad uten nye annonser — antar siste side / overlapp. Stopper.`,
-        );
-        break;
-      }
+      console.log(`Side ${page}: 0 parsbare treff (${consecutiveNoNew}/${maxConsecutiveNoNew} på rad).`);
     } else {
-      consecutiveNoNew = 0;
+      console.log(`  +${added} nye (total ${all.length} unike)`);
+      if (added === 0) {
+        consecutiveNoNew++;
+      } else {
+        consecutiveNoNew = 0;
+      }
+    }
+
+    if (consecutiveNoNew >= maxConsecutiveNoNew) {
+      console.log(`${maxConsecutiveNoNew} sider på rad uten nye annonser — stopper shard.`);
+      break;
     }
 
     if (page < maxPages && delayMs > 0) {
-      await new Promise(r => setTimeout(r, delayMs));
+      await new Promise(r => setTimeout(r, jitter(delayMs)));
     }
   }
 
@@ -782,8 +852,9 @@ async function runScraper() {
       console.log(`\n--- Shard ${shardIdx + 1}/${searchUrls.length}: ${searchUrl} ---`);
       try {
         const summaries = await collectAllListingSummaries(searchUrl);
-        console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser (totalt unike så langt: ${byId.size + summaries.filter(s => !byId.has(s.finnId)).length})`);
-        for (const s of summaries) {
+        const eligible = summaries.filter(isGetaroundEligible);
+        console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser, ${eligible.length} Getaround-egnede`);
+        for (const s of eligible) {
           if (!byId.has(s.finnId)) byId.set(s.finnId, summaryToCarRecord(s));
         }
       } catch (shardErr) {
