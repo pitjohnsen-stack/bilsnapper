@@ -120,12 +120,17 @@ export default function Dashboard({
     const unsubSta = onSnapshot(qStats, (snapshot) => {
       const statsData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setStats(statsData);
+    }, (err) => {
+      console.error('Firestore stats feil:', err);
     });
 
-    const qCars = query(collection(db, 'cars'), where('status', '==', 'active'), where('isAuction', '==', false), limit(1000));
+    const qCars = query(collection(db, 'cars'), where('status', '==', 'active'), limit(1000));
     const unsubCar = onSnapshot(qCars, (snapshot) => {
       const carsData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setDeals(carsData);
+      setLoading(false);
+    }, (err) => {
+      console.error('Firestore cars feil:', err);
       setLoading(false);
     });
 
