@@ -506,17 +506,58 @@ function summaryToCarRecord(s: ListingSummary) {
   };
 }
 
-async function fetchFinnSearchHtml(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'nb-NO,nb;q=0.9,no;q=0.8,en-US;q=0.7,en;q=0.6',
-    },
-  });
-  if (!response.ok) throw new Error(`Finn.no returned status: ${response.status}`);
-  return response.text();
+const BROWSER_USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
+];
+
+function randomUserAgent(): string {
+  return BROWSER_USER_AGENTS[Math.floor(Math.random() * BROWSER_USER_AGENTS.length)];
+}
+
+function jitter(baseMs: number): number {
+  return baseMs + Math.floor(Math.random() * baseMs * 0.5);
+}
+
+async function fetchFinnSearchHtml(url: string, referer?: string): Promise<string> {
+  const headers: Record<string, string> = {
+    'User-Agent': randomUserAgent(),
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'nb-NO,nb;q=0.9,no;q=0.8,en-US;q=0.7,en;q=0.6',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': referer ? 'same-origin' : 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+  };
+  if (referer) headers['Referer'] = referer;
+
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, { headers });
+      if (response.status === 429) {
+        const wait = jitter(15_000 * attempt);
+        console.warn(`429 Rate limited — venter ${Math.round(wait / 1000)}s (forsøk ${attempt}/${MAX_RETRIES})…`);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      if (!response.ok) throw new Error(`Finn.no svarte ${response.status}`);
+      return response.text();
+    } catch (err) {
+      if (attempt === MAX_RETRIES) throw err;
+      const wait = jitter(3_000 * attempt);
+      console.warn(`Fetch feilet (forsøk ${attempt}/${MAX_RETRIES}), venter ${Math.round(wait / 1000)}s: ${err}`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw new Error('fetchFinnSearchHtml: alle forsøk feilet');
 }
 
 /** Henter alle unike treff ved å bla `page=` til ingen nye annonser kommer. */
@@ -529,18 +570,28 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
   let consecutiveNoNew = 0;
   const maxConsecutiveNoNew = Math.max(3, parseInt(process.env.FINN_MAX_EMPTY_PAGES || '6', 10) || 6);
 
+  let prevPageUrl: string | undefined;
+
   for (let page = 1; page <= maxPages; page++) {
     const pageUrl = new URL(baseSearchUrl);
     if (page > 1) pageUrl.searchParams.set('page', String(page));
+    const pageUrlStr = pageUrl.toString();
 
     console.log(`Søkeside ${page}/${maxPages}…`);
-    const html = await fetchFinnSearchHtml(pageUrl.toString());
-    const summaries = extractListingSummariesFromSeoHtml(html);
 
-    if (summaries.length === 0) {
-      console.log(`Ingen parsbare treff på side ${page}, stopper paginering.`);
-      break;
+    let summaries: ListingSummary[] = [];
+    try {
+      const html = await fetchFinnSearchHtml(pageUrlStr, prevPageUrl);
+      summaries = extractListingSummariesFromSeoHtml(html);
+    } catch (err) {
+      console.warn(`Side ${page} feilet etter alle retries: ${err}. Hopper over.`);
+      consecutiveNoNew++;
+      if (consecutiveNoNew >= maxConsecutiveNoNew) break;
+      if (delayMs > 0) await new Promise(r => setTimeout(r, jitter(delayMs)));
+      continue;
     }
+
+    prevPageUrl = pageUrlStr;
 
     let added = 0;
     for (const s of summaries) {
@@ -550,21 +601,26 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
       added++;
     }
 
-    console.log(`  +${added} nye (total ${all.length} unike)`);
-    if (added === 0) {
+    if (summaries.length === 0) {
+      // Finn returnerte ingen parsbar data — mulig bot-blokkering eller siste side
       consecutiveNoNew++;
-      if (consecutiveNoNew >= maxConsecutiveNoNew) {
-        console.log(
-          `${maxConsecutiveNoNew} sider på rad uten nye annonser — antar siste side / overlapp. Stopper.`,
-        );
-        break;
-      }
+      console.log(`Side ${page}: 0 parsbare treff (${consecutiveNoNew}/${maxConsecutiveNoNew} på rad).`);
     } else {
-      consecutiveNoNew = 0;
+      console.log(`  +${added} nye (total ${all.length} unike)`);
+      if (added === 0) {
+        consecutiveNoNew++;
+      } else {
+        consecutiveNoNew = 0;
+      }
+    }
+
+    if (consecutiveNoNew >= maxConsecutiveNoNew) {
+      console.log(`${maxConsecutiveNoNew} sider på rad uten nye annonser — stopper shard.`);
+      break;
     }
 
     if (page < maxPages && delayMs > 0) {
-      await new Promise(r => setTimeout(r, delayMs));
+      await new Promise(r => setTimeout(r, jitter(delayMs)));
     }
   }
 
