@@ -829,68 +829,153 @@ function parseProductJsonLd(html: string): ProductLd | null {
 }
 
 // Scraper & Analyzer Logic
+
+/**
+ * Henter antall biler i Firestore som mangler komplett data (isComplete != true).
+ * Brukes til å bestemme om vi er i "full scrape"-modus eller "ny-annonsering"-modus.
+ */
+async function countIncompleteCars(): Promise<number> {
+  try {
+    if (adminFirestore) {
+      const snap = await adminFirestore.collection('cars').where('isComplete', '==', false).select('finnId').get();
+      return snap.size;
+    } else {
+      const snap = await getDocs(query(collection(db, 'cars'), where('isComplete', '==', false)));
+      return snap.size;
+    }
+  } catch {
+    return 9999; // Anta ikke komplett ved feil
+  }
+}
+
+/**
+ * Samler kun NYE annonser fra Finn.no (sortert nyeste først).
+ * Stopper tidlig når den treffer 10 påfølgende annonser som allerede er i databasen.
+ */
+async function collectNewListingsSince(knownIds: Set<string>): Promise<ListingSummary[]> {
+  const newOnly = new URL(DEFAULT_FINN_CAR_SEARCH);
+  newOnly.searchParams.set('sort', 'PUBLISHED_DESC');
+  const baseUrl = newOnly.toString();
+
+  const maxPages = Math.min(finnMaxSearchPages(), 30);
+  const delayMs = finnPageDelayMs();
+  const seen = new Set<string>();
+  const all: ListingSummary[] = [];
+  let consecutiveKnown = 0;
+  const stopAfterKnown = 10;
+  let prevUrl: string | undefined;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const pageUrl = new URL(baseUrl);
+    if (page > 1) pageUrl.searchParams.set('page', String(page));
+    const pageUrlStr = pageUrl.toString();
+
+    let summaries: ListingSummary[] = [];
+    try {
+      const html = await fetchFinnSearchHtml(pageUrlStr, prevUrl);
+      summaries = extractListingSummariesFromSeoHtml(html).filter(isGetaroundEligible);
+    } catch {
+      break;
+    }
+    prevUrl = pageUrlStr;
+
+    if (summaries.length === 0) break;
+
+    let addedOnPage = 0;
+    for (const s of summaries) {
+      if (seen.has(s.finnId)) continue;
+      seen.add(s.finnId);
+      if (knownIds.has(s.finnId)) {
+        consecutiveKnown++;
+        if (consecutiveKnown >= stopAfterKnown) {
+          console.log(`Truffet ${stopAfterKnown} kjente annonser på rad — stopper ny-søk.`);
+          return all;
+        }
+      } else {
+        consecutiveKnown = 0;
+        all.push(s);
+        addedOnPage++;
+      }
+    }
+    console.log(`Ny-søk side ${page}: +${addedOnPage} nye (total ${all.length})`);
+    if (delayMs > 0) await new Promise(r => setTimeout(r, jitter(delayMs)));
+  }
+  return all;
+}
+
 async function runScraper() {
   if (!firestoreBackendReady()) {
-    console.error(
-      '❌ Scanner stoppet: ingen Firestore-backend. Start serveren etter vellykket auth, legg inn firebase-adminsdk.json, eller sett SCRAPER_EMAIL/SCRAPER_PASSWORD.',
-    );
+    console.error('❌ Scanner stoppet: ingen Firestore-backend.');
     return;
   }
 
-  const shardMode = (process.env.FINN_SHARD_MODE || '').toLowerCase();
-  const searchUrls = shardMode === 'year'
-    ? generateYearShardUrls()
-    : [finnSearchUrl()];
+  const deepMax = finnDeepScrapeMax();
 
-  console.log(`Starting Finn.no scraper… ${searchUrls.length} shard(s), modus: ${shardMode || 'single'}`);
+  // Hent allerede dybdeskrapede finnIds
+  let alreadyComplete = new Set<string>();
+  try {
+    if (adminFirestore) {
+      const snap = await adminFirestore.collection('cars').where('isComplete', '==', true).select('finnId').get();
+      snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
+    } else {
+      const snap = await getDocs(query(collection(db, 'cars'), where('isComplete', '==', true)));
+      snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
+    }
+    console.log(`${alreadyComplete.size} biler allerede dybdeskrapet.`);
+  } catch (e) {
+    console.warn('Kunne ikke hente isComplete-liste:', e);
+  }
+
+  const incompleteCount = await countIncompleteCars();
+  const isPhase1 = incompleteCount > 50; // Fase 1: mange ufullstendige → full shard-scrape
+  console.log(`\n🔍 Fase ${isPhase1 ? '1 (full shard-scrape)' : '2 (ny-annonsering)'} — ${incompleteCount} ufullstendige biler.`);
 
   const byId = new Map<string, Record<string, unknown>>();
 
   try {
-    for (let shardIdx = 0; shardIdx < searchUrls.length; shardIdx++) {
-      const searchUrl = searchUrls[shardIdx];
-      console.log(`\n--- Shard ${shardIdx + 1}/${searchUrls.length}: ${searchUrl} ---`);
-      try {
-        const summaries = await collectAllListingSummaries(searchUrl);
-        const eligible = summaries.filter(isGetaroundEligible);
-        console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser, ${eligible.length} Getaround-egnede`);
-        for (const s of eligible) {
-          if (!byId.has(s.finnId)) byId.set(s.finnId, summaryToCarRecord(s));
+    if (isPhase1) {
+      // --- FASE 1: scrape alle årsshards ---
+      const shardMode = (process.env.FINN_SHARD_MODE || '').toLowerCase();
+      const searchUrls = shardMode === 'year' ? generateYearShardUrls() : [finnSearchUrl()];
+      console.log(`Fase 1: ${searchUrls.length} shard(s)`);
+
+      for (let shardIdx = 0; shardIdx < searchUrls.length; shardIdx++) {
+        const searchUrl = searchUrls[shardIdx];
+        console.log(`\n--- Shard ${shardIdx + 1}/${searchUrls.length} ---`);
+        try {
+          const summaries = await collectAllListingSummaries(searchUrl);
+          const eligible = summaries.filter(isGetaroundEligible);
+          console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser, ${eligible.length} Getaround-egnede`);
+          for (const s of eligible) {
+            if (!byId.has(s.finnId)) byId.set(s.finnId, summaryToCarRecord(s));
+          }
+        } catch (shardErr) {
+          console.error(`Shard ${shardIdx + 1} feilet:`, shardErr);
         }
-      } catch (shardErr) {
-        console.error(`Shard ${shardIdx + 1} feilet:`, shardErr);
+        if (shardIdx < searchUrls.length - 1) {
+          console.log('Venter 5s mellom shards…');
+          await new Promise(r => setTimeout(r, 5000));
+        }
       }
-      if (shardIdx < searchUrls.length - 1) {
-        console.log('Venter 5s mellom shards…');
-        await new Promise(r => setTimeout(r, 5000));
+    } else {
+      // --- FASE 2: søk kun etter nye annonser ---
+      console.log('Fase 2: søker etter nye annonser siden siste scrape…');
+      const newSummaries = await collectNewListingsSince(alreadyComplete);
+      console.log(`Fase 2: ${newSummaries.length} nye Getaround-egnede annonser funnet.`);
+      for (const s of newSummaries) {
+        if (!byId.has(s.finnId)) byId.set(s.finnId, summaryToCarRecord(s));
       }
     }
 
-    console.log(`\nTotalt ${byId.size} unike annonser fra alle shards.`);
+    console.log(`\nTotalt ${byId.size} annonser å behandle.`);
 
-    const deepMax = finnDeepScrapeMax();
+    // --- DEEP SCRAPE: prioriter ufullstendige biler ---
     if (deepMax > 0) {
-      // Prioriter biler som IKKE allerede er i Firestore med komplett data (isComplete=true)
-      // Hent eksisterende finnIds med isComplete=true fra Firestore
-      let alreadyComplete = new Set<string>();
-      try {
-        if (adminFirestore) {
-          const snap = await adminFirestore.collection('cars').where('isComplete', '==', true).select('finnId').get();
-          snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
-        } else {
-          const snap = await getDocs(query(collection(db, 'cars'), where('isComplete', '==', true)));
-          snap.docs.forEach(d => { const fid = d.data().finnId; if (fid) alreadyComplete.add(String(fid)); });
-        }
-        console.log(`${alreadyComplete.size} biler er allerede dybdeskrapet — hopper over disse.`);
-      } catch (e) {
-        console.warn('Kunne ikke hente isComplete-liste, deep-scraper alle:', e);
-      }
-
-      // Prioriter nye biler (ikke i alreadyComplete), ta opp til deepMax
       const allCars = [...byId.values()];
-      const newCars = allCars.filter(c => !alreadyComplete.has(String(c.finnId)));
-      const urls = newCars.slice(0, deepMax).map(c => c.adUrl as string).filter(Boolean);
-      console.log(`Dybdeskraping ${urls.length} NYE annonser av ${newCars.length} totalt nye (FINN_DEEP_SCRAPE_MAX=${deepMax})…`);
+      const toDeepScrape = allCars.filter(c => !alreadyComplete.has(String(c.finnId)));
+      const urls = toDeepScrape.slice(0, deepMax).map(c => c.adUrl as string).filter(Boolean);
+      console.log(`Dybdeskraper ${urls.length} annonser (max ${deepMax})…`);
+
       for (const adUrl of urls) {
         try {
           const detailed = await deepScrapeSingleAd(adUrl);
@@ -904,12 +989,11 @@ async function runScraper() {
       }
     }
 
-    const newCars = [...byId.values()];
-    console.log(`Skriver ${newCars.length} biler til Firestore…`);
-    await commitCarsInBatches(newCars);
-    console.log(`Delta sync fullført. Oppdatert ${newCars.length} biler.`);
+    const cars = [...byId.values()];
+    console.log(`Skriver ${cars.length} biler til Firestore…`);
+    await commitCarsInBatches(cars);
+    console.log(`✅ Ferdig. ${cars.length} biler lagret.`);
 
-    // Record completion BEFORE analyzer (analyzer can take long and drop connection)
     await recordScanCompleted();
     await runAnalyzer();
   } catch (error) {
