@@ -104,6 +104,16 @@ export default function Dashboard({
   const [regionFilter, setRegionFilter] = useState<string>('all');
   const [colorFilter, setColorFilter] = useState<string>('all');
   const [ownersFilter, setOwnersFilter] = useState<string>('all');
+  const [getaroundFilter, setGetaroundFilter] = useState<boolean>(false);
+
+  const GETAROUND_MAX_YEAR_AGE = 15;
+  const GETAROUND_MAX_KM = 200_000;
+  const GETAROUND_EXCLUDED_BRANDS = new Set([
+    'Ferrari', 'Porsche', 'Lamborghini', 'Maserati', 'Bentley',
+    'Rolls-Royce', 'Aston Martin', 'McLaren', 'Bugatti', 'Lotus',
+  ]);
+  const currentYear = new Date().getFullYear();
+  const getaroundMinYear = currentYear - GETAROUND_MAX_YEAR_AGE;
 
   useEffect(() => {
     const qStats = query(collection(db, 'market_statistics'), orderBy('calculatedAt', 'desc'), limit(50));
@@ -223,6 +233,12 @@ export default function Dashboard({
         ownersFilter === 'all' || (ownersFilter === '1' ? car.owners === 1 : car.owners > 1);
       if (!matchBrand || !matchRegion || !matchColor || !matchOwners || !(car.price > 0)) return false;
 
+      if (getaroundFilter) {
+        if (!car.year || car.year < getaroundMinYear) return false;
+        if (car.mileage && car.mileage >= GETAROUND_MAX_KM) return false;
+        if (GETAROUND_EXCLUDED_BRANDS.has(car.brand)) return false;
+      }
+
       if (typeof prefs.maxListPrice === 'number' && car.price > prefs.maxListPrice) return false;
 
       const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
@@ -238,7 +254,7 @@ export default function Dashboard({
 
       return true;
     });
-  }, [deals, brandFilter, regionFilter, colorFilter, ownersFilter, prefs]);
+  }, [deals, brandFilter, regionFilter, colorFilter, ownersFilter, getaroundFilter, getaroundMinYear, prefs]);
 
   const filteredDeals = useMemo(
     () => matchingDeals.slice(0, prefs.listLimit),
@@ -478,10 +494,25 @@ export default function Dashboard({
           <option value="1">1 eier</option>
           <option value="2+">Flere eiere</option>
         </select>
-        {(brandFilter !== 'all' || regionFilter !== 'all' || colorFilter !== 'all' || ownersFilter !== 'all') && (
+        <button
+          type="button"
+          onClick={() => setGetaroundFilter((v) => !v)}
+          className={
+            getaroundFilter
+              ? 'flex items-center gap-2 rounded-lg border border-teal-500 bg-teal-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition'
+              : isDarkMode
+                ? 'flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'
+                : 'flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50'
+          }
+          title={`Vis kun biler egnet for Getaround (≥${getaroundMinYear}, <${GETAROUND_MAX_KM.toLocaleString('no-NO')} km)`}
+        >
+          <CheckCircle size={15} />
+          Getaround-egnet
+        </button>
+        {(brandFilter !== 'all' || regionFilter !== 'all' || colorFilter !== 'all' || ownersFilter !== 'all' || getaroundFilter) && (
           <button
             type="button"
-            onClick={() => { setBrandFilter('all'); setRegionFilter('all'); setColorFilter('all'); setOwnersFilter('all'); }}
+            onClick={() => { setBrandFilter('all'); setRegionFilter('all'); setColorFilter('all'); setOwnersFilter('all'); setGetaroundFilter(false); }}
             className={
               isDarkMode
                 ? 'flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'

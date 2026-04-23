@@ -165,22 +165,36 @@ const DEFAULT_FINN_CAR_SEARCH =
 const finnSearchUrl = () =>
   process.env.FINN_CAR_SEARCH_URL?.trim() || DEFAULT_FINN_CAR_SEARCH;
 
+// --- Getaround eligibility constants ---
+const GETAROUND_MAX_AGE_YEARS = 15;
+const GETAROUND_MAX_KM = 200_000;
+const GETAROUND_EXCLUDED_BRANDS = new Set([
+  'Ferrari', 'Porsche', 'Lamborghini', 'Maserati', 'Bentley',
+  'Rolls-Royce', 'Aston Martin', 'McLaren', 'Bugatti', 'Lotus',
+]);
+const GETAROUND_MIN_YEAR = new Date().getFullYear() - GETAROUND_MAX_AGE_YEARS;
+
+function isGetaroundEligible(s: ListingSummary): boolean {
+  if (s.year && s.year < GETAROUND_MIN_YEAR) return false;
+  if (s.mileage != null && s.mileage >= GETAROUND_MAX_KM) return false;
+  if (GETAROUND_EXCLUDED_BRANDS.has(s.brand)) return false;
+  return true;
+}
+
 /**
- * Genererer årsbaserte shard-URLer som til sammen dekker alle biler på finn.no.
- * Hvert shard dekker et årsintervall, slik at hvert enkelt søk har <2500 treff
- * og vi unngår rate-limiting/blokkering.
+ * Genererer årsbaserte shard-URLer for Getaround-egnede biler (2011+).
+ * Hvert shard dekker et årsintervall slik at hvert søk har <2500 treff.
  */
 function generateYearShardUrls(): string[] {
   const base = DEFAULT_FINN_CAR_SEARCH;
+  const minYear = String(GETAROUND_MIN_YEAR);
   const shards: Array<{ year_from?: string; year_to?: string }> = [
-    { year_to: '2007' },
-    { year_from: '2008', year_to: '2011' },
-    { year_from: '2012', year_to: '2014' },
-    { year_from: '2015', year_to: '2017' },
-    { year_from: '2018', year_to: '2019' },
-    { year_from: '2020', year_to: '2021' },
-    { year_from: '2022', year_to: '2023' },
-    { year_from: '2024' },
+    { year_from: minYear, year_to: String(GETAROUND_MIN_YEAR + 2) },
+    { year_from: String(GETAROUND_MIN_YEAR + 3), year_to: String(GETAROUND_MIN_YEAR + 5) },
+    { year_from: String(GETAROUND_MIN_YEAR + 6), year_to: String(GETAROUND_MIN_YEAR + 7) },
+    { year_from: String(GETAROUND_MIN_YEAR + 8), year_to: String(GETAROUND_MIN_YEAR + 9) },
+    { year_from: String(GETAROUND_MIN_YEAR + 10), year_to: String(GETAROUND_MIN_YEAR + 11) },
+    { year_from: String(GETAROUND_MIN_YEAR + 12) },
   ];
   return shards.map(params => {
     const url = new URL(base);
@@ -782,8 +796,9 @@ async function runScraper() {
       console.log(`\n--- Shard ${shardIdx + 1}/${searchUrls.length}: ${searchUrl} ---`);
       try {
         const summaries = await collectAllListingSummaries(searchUrl);
-        console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser (totalt unike så langt: ${byId.size + summaries.filter(s => !byId.has(s.finnId)).length})`);
-        for (const s of summaries) {
+        const eligible = summaries.filter(isGetaroundEligible);
+        console.log(`Shard ${shardIdx + 1}: ${summaries.length} annonser, ${eligible.length} Getaround-egnede`);
+        for (const s of eligible) {
           if (!byId.has(s.finnId)) byId.set(s.finnId, summaryToCarRecord(s));
         }
       } catch (shardErr) {
