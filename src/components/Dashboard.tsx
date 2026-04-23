@@ -122,7 +122,7 @@ export default function Dashboard({
       setStats(statsData);
     });
 
-    const qCars = query(collection(db, 'cars'), where('status', '==', 'active'), where('isAuction', '==', false), limit(1000));
+    const qCars = query(collection(db, 'cars'), where('status', '==', 'active'), where('isAuction', '==', false));
     const unsubCar = onSnapshot(qCars, (snapshot) => {
       const carsData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setDeals(carsData);
