@@ -1,7 +1,7 @@
 {
   "firestore": [
     {
-      "database": "ai-studio-724f6025-f227-47f5-978b-3fcd3f2803d3",
+      "database": "bilsnapper",
       "rules": "firestore.rules"
     }
   ]
