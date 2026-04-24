@@ -889,7 +889,10 @@ async function runScraper() {
       // Prioriter nye biler (ikke i alreadyComplete), ta opp til deepMax
       const allCars = [...byId.values()];
       const newCars = allCars.filter(c => !alreadyComplete.has(String(c.finnId)));
-      const urls = newCars.slice(0, deepMax).map(c => c.adUrl as string).filter(Boolean);
+      const urls = newCars
+        .slice(0, deepMax)
+        .map(c => (c.adUrl as string) || (c.finnId ? `https://www.finn.no/mobility/item/${c.finnId}` : ''))
+        .filter(Boolean);
       console.log(`Dybdeskraping ${urls.length} NYE annonser av ${newCars.length} totalt nye (FINN_DEEP_SCRAPE_MAX=${deepMax})…`);
       for (const adUrl of urls) {
         try {
