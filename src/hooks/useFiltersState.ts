@@ -54,27 +54,52 @@ export interface FiltersActions {
   hasActiveFilters: () => boolean;
 }
 
-export function useFiltersState(): FiltersState & FiltersActions {
-  const [brandFilter, setBrandFilter] = useState<string>('all');
-  const [modelFilter, setModelFilter] = useState<string>('all');
-  const [regionFilter, setRegionFilter] = useState<string>('all');
-  const [colorFilter, setColorFilter] = useState<string>('all');
-  const [ownersFilter, setOwnersFilter] = useState<string>('all');
-  const [fuelFilter, setFuelFilter] = useState<string>('all');
-  const [gearboxFilter, setGearboxFilter] = useState<string>('all');
-  const [sellerTypeFilter, setSellerTypeFilter] = useState<string>('all');
-  const [getaroundFilter, setGetaroundFilter] = useState<boolean>(false);
-  const [onlyComplete, setOnlyComplete] = useState<boolean>(false);
-  const [onlyWithImage, setOnlyWithImage] = useState<boolean>(false);
-  const [priceMin, setPriceMin] = useState<string>('');
-  const [priceMax, setPriceMax] = useState<string>('');
-  const [yearMin, setYearMin] = useState<string>('');
-  const [yearMax, setYearMax] = useState<string>('');
-  const [kmMin, setKmMin] = useState<string>('');
-  const [kmMax, setKmMax] = useState<string>('');
-  const [searchText, setSearchText] = useState<string>('');
-  const [sortBy, setSortBy] = useState<SortKey>('savingKr');
-  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+/** Hydrate filter defaults from a URL-param snapshot (string keys only). */
+export function filtersFromParams(p: Record<string, string> = {}): Partial<FiltersState> {
+  return {
+    brandFilter: p.brand || 'all',
+    modelFilter: p.model || 'all',
+    regionFilter: p.region || 'all',
+    colorFilter: p.color || 'all',
+    ownersFilter: p.owners || 'all',
+    fuelFilter: p.fuel || 'all',
+    gearboxFilter: p.gearbox || 'all',
+    sellerTypeFilter: p.seller || 'all',
+    getaroundFilter: p.getaround === 'true',
+    onlyComplete: p.complete === 'true',
+    onlyWithImage: p.withImage === 'true',
+    priceMin: p.priceMin || '',
+    priceMax: p.priceMax || '',
+    yearMin: p.yearMin || '',
+    yearMax: p.yearMax || '',
+    kmMin: p.kmMin || '',
+    kmMax: p.kmMax || '',
+    searchText: p.q || '',
+    sortBy: (p.sort as SortKey) || 'savingKr',
+  };
+}
+
+export function useFiltersState(initial: Partial<FiltersState> = {}): FiltersState & FiltersActions {
+  const [brandFilter, setBrandFilter] = useState<string>(initial.brandFilter ?? 'all');
+  const [modelFilter, setModelFilter] = useState<string>(initial.modelFilter ?? 'all');
+  const [regionFilter, setRegionFilter] = useState<string>(initial.regionFilter ?? 'all');
+  const [colorFilter, setColorFilter] = useState<string>(initial.colorFilter ?? 'all');
+  const [ownersFilter, setOwnersFilter] = useState<string>(initial.ownersFilter ?? 'all');
+  const [fuelFilter, setFuelFilter] = useState<string>(initial.fuelFilter ?? 'all');
+  const [gearboxFilter, setGearboxFilter] = useState<string>(initial.gearboxFilter ?? 'all');
+  const [sellerTypeFilter, setSellerTypeFilter] = useState<string>(initial.sellerTypeFilter ?? 'all');
+  const [getaroundFilter, setGetaroundFilter] = useState<boolean>(initial.getaroundFilter ?? false);
+  const [onlyComplete, setOnlyComplete] = useState<boolean>(initial.onlyComplete ?? false);
+  const [onlyWithImage, setOnlyWithImage] = useState<boolean>(initial.onlyWithImage ?? false);
+  const [priceMin, setPriceMin] = useState<string>(initial.priceMin ?? '');
+  const [priceMax, setPriceMax] = useState<string>(initial.priceMax ?? '');
+  const [yearMin, setYearMin] = useState<string>(initial.yearMin ?? '');
+  const [yearMax, setYearMax] = useState<string>(initial.yearMax ?? '');
+  const [kmMin, setKmMin] = useState<string>(initial.kmMin ?? '');
+  const [kmMax, setKmMax] = useState<string>(initial.kmMax ?? '');
+  const [searchText, setSearchText] = useState<string>(initial.searchText ?? '');
+  const [sortBy, setSortBy] = useState<SortKey>(initial.sortBy ?? 'savingKr');
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(initial.showAdvanced ?? false);
 
   const resetAll = useCallback(() => {
     setBrandFilter('all');

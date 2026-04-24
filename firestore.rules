@@ -120,6 +120,11 @@ service cloud.firestore {
       allow read, create, update, delete: if isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Per-bruker watchlist (favoritter): eier-only subcollection
+    match /users/{userId}/watchlist/{finnId} {
+      allow read, create, update, delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
     // Admin-register: brukere med dokument i admins/ får isAdmin()-rettigheter.
     // Første admin bootstrappes via Firebase Console (som bypasser rules).
     // Deretter kan eksisterende admin legge til nye.

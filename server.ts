@@ -629,6 +629,43 @@ async function collectAllListingSummaries(baseSearchUrl: string): Promise<Listin
 
 async function commitCarsInBatches(cars: Record<string, unknown>[]) {
   const BATCH = 400;
+  const MAX_HISTORY = 30; // maks antall prishistorikk-entries per bil
+
+  // Pre-les eksisterende priser for å tracke prisendringer
+  const existingPrices = new Map<string, { price: number; priceHistory?: Array<{ at: string; price: number }> }>();
+  try {
+    if (adminFirestore) {
+      const snap = await adminFirestore.collection('cars').select('price', 'priceHistory').get();
+      snap.docs.forEach(d => {
+        const data = d.data();
+        if (typeof data.price === 'number') {
+          existingPrices.set(d.id, { price: data.price, priceHistory: data.priceHistory });
+        }
+      });
+      console.log(`Lest ${existingPrices.size} eksisterende priser for delta-tracking.`);
+    }
+  } catch (e) {
+    console.warn('Kunne ikke lese eksisterende priser (hopper over prishistorikk):', e);
+  }
+
+  let priceChanges = 0;
+  const enrichWithHistory = (car: Record<string, unknown>): Record<string, unknown> => {
+    const finnId = String(car.finnId ?? '');
+    const newPrice = car.price as number | undefined;
+    if (!finnId || typeof newPrice !== 'number') return car;
+    const prev = existingPrices.get(finnId);
+    if (!prev) {
+      return { ...car, priceHistory: [{ at: new Date().toISOString(), price: newPrice }] };
+    }
+    if (prev.price !== newPrice) {
+      priceChanges++;
+      const history = Array.isArray(prev.priceHistory) ? prev.priceHistory.slice(-MAX_HISTORY + 1) : [];
+      history.push({ at: new Date().toISOString(), price: newPrice });
+      return { ...car, priceHistory: history, prevPrice: prev.price };
+    }
+    return car;
+  };
+
   try {
     if (adminFirestore) {
       for (let i = 0; i < cars.length; i += BATCH) {
@@ -636,11 +673,12 @@ async function commitCarsInBatches(cars: Record<string, unknown>[]) {
         const batch = adminFirestore.batch();
         for (const car of chunk) {
           const finnId = car.finnId as string;
-          batch.set(adminFirestore.collection('cars').doc(finnId), car as Record<string, unknown>, { merge: true });
+          batch.set(adminFirestore.collection('cars').doc(finnId), enrichWithHistory(car), { merge: true });
         }
         await batch.commit();
         console.log(`Firestore (Admin): lagret batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
       }
+      console.log(`Prisendringer oppdaget: ${priceChanges} biler.`);
       return;
     }
     for (let i = 0; i < cars.length; i += BATCH) {
@@ -648,11 +686,12 @@ async function commitCarsInBatches(cars: Record<string, unknown>[]) {
       const batch = writeBatch(db);
       for (const car of chunk) {
         const finnId = car.finnId as string;
-        batch.set(doc(db, 'cars', finnId), car, { merge: true });
+        batch.set(doc(db, 'cars', finnId), enrichWithHistory(car), { merge: true });
       }
       await batch.commit();
       console.log(`Firestore: lagret batch ${Math.floor(i / BATCH) + 1} (${chunk.length} biler)`);
     }
+    console.log(`Prisendringer oppdaget: ${priceChanges} biler.`);
   } catch (e: unknown) {
     const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
     console.error('Firestore batch feilet:', e);

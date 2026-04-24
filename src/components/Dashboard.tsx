@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react';
 import { downloadDealsCsv } from '../lib/csvExport';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useDebounced } from '../hooks/useDebounced';
-import { useFiltersState } from '../hooks/useFiltersState';
+import { filtersFromParams, useFiltersState } from '../hooks/useFiltersState';
 import { useFilteredSortedDeals } from '../hooks/useFilteredSortedDeals';
 import { useScanTrigger } from '../hooks/useScanTrigger';
+import { readInitialParams, useUrlSync } from '../hooks/useUrlSync';
+import { useWatchlist } from '../hooks/useWatchlist';
 import type { mergeUserSettings } from '../types/userSettings';
 import type { Car } from '../types/car';
 import DashboardSkeleton from './DashboardSkeleton';
@@ -33,10 +35,23 @@ export interface DashboardProps {
  */
 export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }: DashboardProps) {
   const { cars, stats, lastScanLabel, loading } = useDashboardData();
-  const filters = useFiltersState();
+  const filters = useFiltersState(filtersFromParams(readInitialParams()));
   const debouncedSearch = useDebounced(filters.searchText, 300);
+  useUrlSync({
+    brand: filters.brandFilter, model: filters.modelFilter, region: filters.regionFilter,
+    color: filters.colorFilter, owners: filters.ownersFilter, fuel: filters.fuelFilter,
+    gearbox: filters.gearboxFilter, seller: filters.sellerTypeFilter,
+    getaround: String(filters.getaroundFilter), complete: String(filters.onlyComplete),
+    withImage: String(filters.onlyWithImage),
+    priceMin: filters.priceMin, priceMax: filters.priceMax,
+    yearMin: filters.yearMin, yearMax: filters.yearMax,
+    kmMin: filters.kmMin, kmMax: filters.kmMax,
+    q: debouncedSearch, sort: filters.sortBy,
+  });
   const { scanning, toast, triggerScraper } = useScanTrigger();
+  const { watchedIds, toggleWatch } = useWatchlist(userId);
   const [activeTab, setActiveTab] = useState<Tab>('oversikt');
+  const [onlyFavorites, setOnlyFavorites] = useState(false);
 
   const uniqueBrands = useMemo(
     () => dedupSorted(cars.map((c) => c.brand)),
@@ -79,9 +94,14 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
     prefs,
   });
 
+  const favoriteFiltered = useMemo(
+    () => (onlyFavorites ? sortedDeals.filter((c) => watchedIds.has(c.id)) : sortedDeals),
+    [sortedDeals, onlyFavorites, watchedIds],
+  );
+
   const filteredDeals = useMemo(
-    () => sortedDeals.slice(0, prefs.listLimit),
-    [sortedDeals, prefs.listLimit],
+    () => favoriteFiltered.slice(0, prefs.listLimit),
+    [favoriteFiltered, prefs.listLimit],
   );
 
   const filteredStats = useMemo(() => {
@@ -240,8 +260,29 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
           />
           <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
             <div className="space-y-6 lg:col-span-2">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Utvalgte annonser</h3>
-              <DealsGrid deals={filteredDeals} isDarkMode={isDarkMode} />
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Utvalgte annonser</h3>
+                <button
+                  type="button"
+                  onClick={() => setOnlyFavorites((v) => !v)}
+                  className={
+                    onlyFavorites
+                      ? 'rounded-lg bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-600'
+                      : 'rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700'
+                  }
+                  title={onlyFavorites ? 'Viser kun favoritter' : 'Vis kun favoritter'}
+                >
+                  {watchedIds.size > 0 ? `♥ Favoritter (${watchedIds.size})` : '♥ Favoritter'}
+                </button>
+              </div>
+              <DealsGrid
+                deals={filteredDeals}
+                isDarkMode={isDarkMode}
+                watchedIds={watchedIds}
+                onToggleWatch={(c) =>
+                  toggleWatch(c.id, { brand: c.brand, model: c.model, price: c.price })
+                }
+              />
             </div>
             <PriceCharts
               isDarkMode={isDarkMode}

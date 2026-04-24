@@ -1,9 +1,34 @@
-import { Calendar, Car as CarIcon, CheckCircle, Gauge, MapPin, Palette, Sparkles, Users } from 'lucide-react';
+import { Calendar, Car as CarIcon, CheckCircle, Gauge, Heart, MapPin, Palette, Sparkles, TrendingDown, TrendingUp, Users } from 'lucide-react';
 import type { Car } from '../../types/car';
+
+/**
+ * Derive an inline price-change signal from `priceHistory` (last two entries)
+ * or the legacy `prevPrice` field. Returns null when the ad has no prior
+ * snapshot to compare against.
+ */
+function priceChange(car: Car): { delta: number; pct: number } | null {
+  const hist = car.priceHistory;
+  if (Array.isArray(hist) && hist.length >= 2) {
+    const prev = hist[hist.length - 2]?.price;
+    const cur = hist[hist.length - 1]?.price;
+    if (typeof prev === 'number' && typeof cur === 'number' && prev !== cur) {
+      return { delta: cur - prev, pct: prev > 0 ? (cur - prev) / prev : 0 };
+    }
+  }
+  if (typeof car.prevPrice === 'number' && car.prevPrice !== car.price) {
+    return {
+      delta: car.price - car.prevPrice,
+      pct: car.prevPrice > 0 ? (car.price - car.prevPrice) / car.prevPrice : 0,
+    };
+  }
+  return null;
+}
 
 export interface DealCardProps {
   car: Car;
   isDarkMode: boolean;
+  isWatched?: boolean;
+  onToggleWatch?: (car: Car) => void;
 }
 
 function buildFinnUrl(car: Car): string {
@@ -12,7 +37,7 @@ function buildFinnUrl(car: Car): string {
   return id ? `https://www.finn.no/car/used/ad.html?finnkode=${id}` : '#';
 }
 
-export function DealCard({ car, isDarkMode }: DealCardProps) {
+export function DealCard({ car, isDarkMode, isWatched, onToggleWatch }: DealCardProps) {
   const km = car.mileage ?? car.km;
   const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
   const savings = fair != null ? fair - car.price : null;
@@ -20,6 +45,7 @@ export function DealCard({ car, isDarkMode }: DealCardProps) {
   const region = car.region || car.location;
   const eu = car.euApprovedUntil || car.euControl;
   const finnUrl = buildFinnUrl(car);
+  const change = priceChange(car);
 
   return (
     <article
@@ -66,6 +92,20 @@ export function DealCard({ car, isDarkMode }: DealCardProps) {
             {region}
           </span>
         )}
+        {onToggleWatch && (
+          <button
+            type="button"
+            onClick={(e) => { e.preventDefault(); onToggleWatch(car); }}
+            aria-label={isWatched ? 'Fjern fra favoritter' : 'Legg til favoritter'}
+            className={
+              isWatched
+                ? 'absolute left-3 top-3 rounded-full bg-rose-500/90 p-1.5 text-white shadow-md transition hover:bg-rose-500'
+                : 'absolute left-3 top-3 rounded-full bg-black/40 p-1.5 text-white/80 shadow-md transition hover:bg-black/60'
+            }
+          >
+            <Heart size={14} fill={isWatched ? 'currentColor' : 'none'} />
+          </button>
+        )}
       </div>
       <div className="p-5">
         <div className="mb-1 flex items-start justify-between gap-2">
@@ -79,6 +119,19 @@ export function DealCard({ car, isDarkMode }: DealCardProps) {
             {fair != null && (
               <span className="block text-xs tabular-nums text-slate-400 line-through">
                 {fair.toLocaleString('no-NO')} kr
+              </span>
+            )}
+            {change && (
+              <span
+                className={
+                  change.delta < 0
+                    ? 'mt-0.5 inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums text-emerald-600 dark:text-emerald-400'
+                    : 'mt-0.5 inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums text-rose-600 dark:text-rose-400'
+                }
+                title={`Tidligere pris: ${Math.round(car.price - change.delta).toLocaleString('no-NO')} kr`}
+              >
+                {change.delta < 0 ? <TrendingDown size={11} /> : <TrendingUp size={11} />}
+                {change.delta < 0 ? '' : '+'}{Math.round(change.delta).toLocaleString('no-NO')} kr ({(change.pct * 100).toFixed(1)}%)
               </span>
             )}
           </div>
