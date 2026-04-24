@@ -26,5 +26,5 @@ jobs:
           FINN_SHARD_MODE: 'year'
           FINN_MAX_SEARCH_PAGES: '200'
           FINN_PAGE_DELAY_MS: '1000'
-          FINN_DEEP_SCRAPE_MAX: '300'
+          FINN_DEEP_SCRAPE_MAX: '2000'
         run: npm run scrape
