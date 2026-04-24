@@ -893,18 +893,35 @@ async function runScraper() {
         .slice(0, deepMax)
         .map(c => (c.adUrl as string) || (c.finnId ? `https://www.finn.no/mobility/item/${c.finnId}` : ''))
         .filter(Boolean);
-      console.log(`Dybdeskraping ${urls.length} NYE annonser av ${newCars.length} totalt nye (FINN_DEEP_SCRAPE_MAX=${deepMax})…`);
-      for (const adUrl of urls) {
-        try {
-          const detailed = await deepScrapeSingleAd(adUrl);
-          if (!detailed?.finnId) continue;
-          const finnId = String(detailed.finnId);
-          const base = byId.get(finnId) || { finnId };
-          byId.set(finnId, { ...base, ...detailed, isComplete: true });
-        } catch (err) {
-          console.error(`Deep scrape feilet ${adUrl}:`, err);
+      const CONCURRENCY = Math.max(1, parseInt(process.env.FINN_DEEP_CONCURRENCY || '4', 10));
+      console.log(`Dybdeskraping ${urls.length} NYE annonser av ${newCars.length} totalt nye (FINN_DEEP_SCRAPE_MAX=${deepMax}, concurrency=${CONCURRENCY})…`);
+      let doneCount = 0;
+      let errCount = 0;
+      const startTs = Date.now();
+      const runWorker = async () => {
+        while (urls.length > 0) {
+          const adUrl = urls.shift();
+          if (!adUrl) break;
+          try {
+            const detailed = await deepScrapeSingleAd(adUrl);
+            if (detailed?.finnId) {
+              const finnId = String(detailed.finnId);
+              const base = byId.get(finnId) || { finnId };
+              byId.set(finnId, { ...base, ...detailed, isComplete: true });
+            }
+          } catch (err) {
+            errCount++;
+            console.error(`Deep scrape feilet ${adUrl}:`, err);
+          }
+          doneCount++;
+          if (doneCount % 100 === 0) {
+            const rate = doneCount / ((Date.now() - startTs) / 1000);
+            console.log(`  …${doneCount} ferdig (${rate.toFixed(1)}/s, ${errCount} feil)`);
+          }
         }
-      }
+      };
+      await Promise.all(Array.from({ length: CONCURRENCY }, () => runWorker()));
+      console.log(`Dybdeskraping fullført: ${doneCount} ok, ${errCount} feilet på ${Math.round((Date.now() - startTs) / 1000)}s.`);
     }
 
     const newCars = [...byId.values()];
@@ -1107,15 +1124,24 @@ async function runAnalyzer() {
       }
 
       const confidence = Math.min(1, Math.max(0.2, group.length / 25));
+      // Beregn per-bil kupp-score server-side sa klienten slipper a regne
+      const carScore = (price: number) => {
+        const savingKr = median - price;
+        const savingPct = median > 0 ? savingKr / median : 0;
+        // dealScore: 0..100, vekter savingPct med confidence
+        const dealScore = Math.round(Math.max(0, Math.min(1, savingPct)) * 100 * confidence);
+        return { savingKr, savingPct, dealScore };
+      };
       if (adminFirestore) {
         let carBatch = adminFirestore.batch();
         let carBatchOps = 0;
         for (const car of group.filter((c) => c.status === 'active')) {
           const fid = car.finnId ?? car.id;
           if (fid == null || fid === '') continue;
+          const s = carScore(car.price);
           carBatch.set(
             adminFirestore.collection('cars').doc(String(fid)),
-            { fairPrice: median, confidence },
+            { fairPrice: median, confidence, ...s },
             { merge: true },
           );
           carBatchOps++;
@@ -1132,9 +1158,10 @@ async function runAnalyzer() {
         for (const car of group.filter((c) => c.status === 'active')) {
           const fid = car.finnId ?? car.id;
           if (fid == null || fid === '') continue;
+          const s = carScore(car.price);
           carBatch.set(
             doc(db, 'cars', String(fid)),
-            { fairPrice: median, confidence },
+            { fairPrice: median, confidence, ...s },
             { merge: true },
           );
           carBatchOps++;
