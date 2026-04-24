@@ -101,10 +101,25 @@ export default function Dashboard({
   const [scanning, setScanning] = useState(false);
 
   const [brandFilter, setBrandFilter] = useState<string>('all');
+  const [modelFilter, setModelFilter] = useState<string>('all');
   const [regionFilter, setRegionFilter] = useState<string>('all');
   const [colorFilter, setColorFilter] = useState<string>('all');
   const [ownersFilter, setOwnersFilter] = useState<string>('all');
+  const [fuelFilter, setFuelFilter] = useState<string>('all');
+  const [gearboxFilter, setGearboxFilter] = useState<string>('all');
+  const [sellerTypeFilter, setSellerTypeFilter] = useState<string>('all');
   const [getaroundFilter, setGetaroundFilter] = useState<boolean>(false);
+  const [onlyComplete, setOnlyComplete] = useState<boolean>(false);
+  const [onlyWithImage, setOnlyWithImage] = useState<boolean>(false);
+  const [priceMin, setPriceMin] = useState<string>('');
+  const [priceMax, setPriceMax] = useState<string>('');
+  const [yearMin, setYearMin] = useState<string>('');
+  const [yearMax, setYearMax] = useState<string>('');
+  const [kmMin, setKmMin] = useState<string>('');
+  const [kmMax, setKmMax] = useState<string>('');
+  const [searchText, setSearchText] = useState<string>('');
+  const [sortBy, setSortBy] = useState<string>('savingKr');
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
   const GETAROUND_MAX_YEAR_AGE = 15;
   const GETAROUND_MAX_KM = 200_000;
@@ -213,25 +228,74 @@ export default function Dashboard({
     }
   };
 
-  const uniqueBrands = useMemo(() => Array.from(new Set(deals.map((d) => d.brand))).sort(), [deals]);
+  const uniqueBrands = useMemo(() => Array.from(new Set(deals.map((d) => d.brand))).filter((b) => b && b !== 'Ukjent').sort(), [deals]);
+  const uniqueModels = useMemo(
+    () => Array.from(new Set(
+      deals
+        .filter((d) => brandFilter === 'all' || d.brand === brandFilter)
+        .map((d) => d.model)
+    )).filter((m) => m && m !== 'Ukjent').sort(),
+    [deals, brandFilter],
+  );
   const uniqueRegions = useMemo(
-    () => Array.from(new Set(deals.map((d) => d.region || d.location || ''))).filter(Boolean).sort(),
+    () => Array.from(new Set(deals.map((d) => d.region || d.location || ''))).filter((r) => r && r !== 'Ukjent').sort(),
     [deals],
   );
   const uniqueColors = useMemo(
     () => Array.from(new Set(deals.map((d) => d.color))).filter((c) => c && c !== 'Ukjent').sort(),
     [deals],
   );
+  const uniqueFuels = useMemo(
+    () => Array.from(new Set(deals.map((d) => d.fuel))).filter((f) => f && f !== 'Ukjent').sort(),
+    [deals],
+  );
+  const uniqueGearboxes = useMemo(
+    () => Array.from(new Set(deals.map((d) => d.gearbox))).filter((g) => g && g !== 'Ukjent').sort(),
+    [deals],
+  );
+  const uniqueSellerTypes = useMemo(
+    () => Array.from(new Set(deals.map((d) => d.sellerType))).filter((s) => s && s !== 'Ukjent').sort(),
+    [deals],
+  );
 
   const matchingDeals = useMemo(() => {
+    const pMin = priceMin ? parseInt(priceMin, 10) : null;
+    const pMax = priceMax ? parseInt(priceMax, 10) : null;
+    const yMin = yearMin ? parseInt(yearMin, 10) : null;
+    const yMax = yearMax ? parseInt(yearMax, 10) : null;
+    const kMin = kmMin ? parseInt(kmMin, 10) : null;
+    const kMax = kmMax ? parseInt(kmMax, 10) : null;
+    const searchLower = searchText.trim().toLowerCase();
+
     return deals.filter((car) => {
       const matchBrand = brandFilter === 'all' || car.brand === brandFilter;
+      const matchModel = modelFilter === 'all' || car.model === modelFilter;
       const matchRegion =
         regionFilter === 'all' || car.region === regionFilter || car.location === regionFilter;
       const matchColor = colorFilter === 'all' || car.color === colorFilter;
       const matchOwners =
         ownersFilter === 'all' || (ownersFilter === '1' ? car.owners === 1 : car.owners > 1);
-      if (!matchBrand || !matchRegion || !matchColor || !matchOwners || !(car.price > 0)) return false;
+      const matchFuel = fuelFilter === 'all' || car.fuel === fuelFilter;
+      const matchGearbox = gearboxFilter === 'all' || car.gearbox === gearboxFilter;
+      const matchSellerType = sellerTypeFilter === 'all' || car.sellerType === sellerTypeFilter;
+      if (!matchBrand || !matchModel || !matchRegion || !matchColor || !matchOwners) return false;
+      if (!matchFuel || !matchGearbox || !matchSellerType || !(car.price > 0)) return false;
+
+      if (pMin != null && car.price < pMin) return false;
+      if (pMax != null && car.price > pMax) return false;
+      if (yMin != null && (!car.year || car.year < yMin)) return false;
+      if (yMax != null && (!car.year || car.year > yMax)) return false;
+      const km = car.mileage ?? car.km;
+      if (kMin != null && (km == null || km < kMin)) return false;
+      if (kMax != null && (km == null || km > kMax)) return false;
+
+      if (onlyComplete && !car.isComplete) return false;
+      if (onlyWithImage && !car.imageUrl) return false;
+
+      if (searchLower) {
+        const hay = `${car.brand ?? ''} ${car.model ?? ''}`.toLowerCase();
+        if (!hay.includes(searchLower)) return false;
+      }
 
       if (getaroundFilter) {
         if (!car.year || car.year < getaroundMinYear) return false;
@@ -254,11 +318,35 @@ export default function Dashboard({
 
       return true;
     });
-  }, [deals, brandFilter, regionFilter, colorFilter, ownersFilter, getaroundFilter, getaroundMinYear, prefs]);
+  }, [deals, brandFilter, modelFilter, regionFilter, colorFilter, ownersFilter, fuelFilter, gearboxFilter, sellerTypeFilter, getaroundFilter, getaroundMinYear, onlyComplete, onlyWithImage, priceMin, priceMax, yearMin, yearMax, kmMin, kmMax, searchText, prefs]);
+
+  const sortedDeals = useMemo(() => {
+    const arr = matchingDeals.slice();
+    const saving = (c: any) => (typeof c.fairPrice === 'number' ? c.fairPrice - c.price : -Infinity);
+    const savingPct = (c: any) => (typeof c.fairPrice === 'number' && c.fairPrice > 0 ? (c.fairPrice - c.price) / c.fairPrice : -Infinity);
+    const adTs = (c: any) => {
+      const d = c.adDate ? new Date(c.adDate).getTime() : 0;
+      return Number.isFinite(d) ? d : 0;
+    };
+    switch (sortBy) {
+      case 'priceAsc': arr.sort((a, b) => a.price - b.price); break;
+      case 'priceDesc': arr.sort((a, b) => b.price - a.price); break;
+      case 'yearDesc': arr.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)); break;
+      case 'yearAsc': arr.sort((a, b) => (a.year ?? 99999) - (b.year ?? 99999)); break;
+      case 'kmAsc': arr.sort((a, b) => (a.mileage ?? Infinity) - (b.mileage ?? Infinity)); break;
+      case 'kmDesc': arr.sort((a, b) => (b.mileage ?? -1) - (a.mileage ?? -1)); break;
+      case 'newest': arr.sort((a, b) => adTs(b) - adTs(a)); break;
+      case 'confidence': arr.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)); break;
+      case 'savingPct': arr.sort((a, b) => savingPct(b) - savingPct(a)); break;
+      case 'savingKr':
+      default: arr.sort((a, b) => saving(b) - saving(a)); break;
+    }
+    return arr;
+  }, [matchingDeals, sortBy]);
 
   const filteredDeals = useMemo(
-    () => matchingDeals.slice(0, prefs.listLimit),
-    [matchingDeals, prefs.listLimit],
+    () => sortedDeals.slice(0, prefs.listLimit),
+    [sortedDeals, prefs.listLimit],
   );
 
   const filteredStats = useMemo(() => {
@@ -441,87 +529,185 @@ export default function Dashboard({
       <div
         className={
           isDarkMode
-            ? 'flex flex-wrap items-center gap-3 rounded-2xl border border-slate-700/60 bg-slate-800/40 p-4'
-            : 'flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm'
+            ? 'space-y-3 rounded-2xl border border-slate-700/60 bg-slate-800/40 p-4'
+            : 'space-y-3 rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm'
         }
       >
-        <span className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
-          <Filter size={18} className="text-teal-600 dark:text-teal-400" />
-          Filter
-        </span>
-        <select
-          className={`min-w-[140px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
-          value={brandFilter}
-          onChange={(e) => setBrandFilter(e.target.value)}
-        >
-          <option value="all">Alle merker</option>
-          {uniqueBrands.map((brand) => (
-            <option key={brand} value={brand}>
-              {brand}
-            </option>
-          ))}
-        </select>
-        <select
-          className={`min-w-[140px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
-          value={regionFilter}
-          onChange={(e) => setRegionFilter(e.target.value)}
-        >
-          <option value="all">Alle steder</option>
-          {uniqueRegions.map((region) => (
-            <option key={region} value={region}>
-              {region}
-            </option>
-          ))}
-        </select>
-        <select
-          className={`min-w-[140px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
-          value={colorFilter}
-          onChange={(e) => setColorFilter(e.target.value)}
-        >
-          <option value="all">Alle farger</option>
-          {uniqueColors.map((color) => (
-            <option key={color} value={color}>
-              {color}
-            </option>
-          ))}
-        </select>
-        <select
-          className={`min-w-[140px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
-          value={ownersFilter}
-          onChange={(e) => setOwnersFilter(e.target.value)}
-        >
-          <option value="all">Eiere</option>
-          <option value="1">1 eier</option>
-          <option value="2+">Flere eiere</option>
-        </select>
-        <button
-          type="button"
-          onClick={() => setGetaroundFilter((v) => !v)}
-          className={
-            getaroundFilter
-              ? 'flex items-center gap-2 rounded-lg border border-teal-500 bg-teal-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition'
-              : isDarkMode
-                ? 'flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'
-                : 'flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50'
-          }
-          title={`Vis kun biler egnet for Getaround (≥${getaroundMinYear}, <${GETAROUND_MAX_KM.toLocaleString('no-NO')} km)`}
-        >
-          <CheckCircle size={15} />
-          Getaround-egnet
-        </button>
-        {(brandFilter !== 'all' || regionFilter !== 'all' || colorFilter !== 'all' || ownersFilter !== 'all' || getaroundFilter) && (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+            <Filter size={18} className="text-teal-600 dark:text-teal-400" />
+            Filter
+          </span>
+          <input
+            type="search"
+            placeholder="Søk merke/modell…"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            className={`min-w-[160px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
+          />
+          <select
+            className={`min-w-[130px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
+            value={brandFilter}
+            onChange={(e) => { setBrandFilter(e.target.value); setModelFilter('all'); }}
+          >
+            <option value="all">Alle merker</option>
+            {uniqueBrands.map((brand) => (
+              <option key={brand} value={brand}>{brand}</option>
+            ))}
+          </select>
+          <select
+            className={`min-w-[130px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
+            value={modelFilter}
+            onChange={(e) => setModelFilter(e.target.value)}
+            disabled={brandFilter === 'all'}
+            title={brandFilter === 'all' ? 'Velg merke først' : ''}
+          >
+            <option value="all">Alle modeller</option>
+            {uniqueModels.map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ))}
+          </select>
+          <select
+            className={`min-w-[130px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
+            value={regionFilter}
+            onChange={(e) => setRegionFilter(e.target.value)}
+          >
+            <option value="all">Alle steder</option>
+            {uniqueRegions.map((region) => (
+              <option key={region} value={region}>{region}</option>
+            ))}
+          </select>
+          <select
+            className={`min-w-[150px] flex-1 px-3 py-2.5 text-sm ${selectBase(isDarkMode)}`}
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            title="Sortering"
+          >
+            <option value="savingKr">Størst besparelse (kr)</option>
+            <option value="savingPct">Størst besparelse (%)</option>
+            <option value="priceAsc">Pris ↑</option>
+            <option value="priceDesc">Pris ↓</option>
+            <option value="yearDesc">Nyest årsmodell</option>
+            <option value="yearAsc">Eldst årsmodell</option>
+            <option value="kmAsc">Færrest km</option>
+            <option value="kmDesc">Flest km</option>
+            <option value="newest">Nyeste annonse</option>
+            <option value="confidence">Høyest confidence</option>
+          </select>
           <button
             type="button"
-            onClick={() => { setBrandFilter('all'); setRegionFilter('all'); setColorFilter('all'); setOwnersFilter('all'); setGetaroundFilter(false); }}
+            onClick={() => setShowAdvanced((v) => !v)}
             className={
               isDarkMode
                 ? 'flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'
-                : 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50'
+                : 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50'
             }
           >
-            <X size={14} />
-            Nullstill
+            <ListFilter size={14} />
+            {showAdvanced ? 'Skjul avansert' : 'Flere filtre'}
           </button>
+          <button
+            type="button"
+            onClick={() => setGetaroundFilter((v) => !v)}
+            className={
+              getaroundFilter
+                ? 'flex items-center gap-2 rounded-lg border border-teal-500 bg-teal-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition'
+                : isDarkMode
+                  ? 'flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'
+                  : 'flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50'
+            }
+            title={`Vis kun biler egnet for Getaround (≥${getaroundMinYear}, <${GETAROUND_MAX_KM.toLocaleString('no-NO')} km)`}
+          >
+            <CheckCircle size={15} />
+            Getaround-egnet
+          </button>
+          {(brandFilter !== 'all' || modelFilter !== 'all' || regionFilter !== 'all' || colorFilter !== 'all' || ownersFilter !== 'all' || fuelFilter !== 'all' || gearboxFilter !== 'all' || sellerTypeFilter !== 'all' || getaroundFilter || onlyComplete || onlyWithImage || searchText || priceMin || priceMax || yearMin || yearMax || kmMin || kmMax) && (
+            <button
+              type="button"
+              onClick={() => {
+                setBrandFilter('all'); setModelFilter('all'); setRegionFilter('all');
+                setColorFilter('all'); setOwnersFilter('all'); setFuelFilter('all');
+                setGearboxFilter('all'); setSellerTypeFilter('all');
+                setGetaroundFilter(false); setOnlyComplete(false); setOnlyWithImage(false);
+                setSearchText(''); setPriceMin(''); setPriceMax('');
+                setYearMin(''); setYearMax(''); setKmMin(''); setKmMax('');
+              }}
+              className={
+                isDarkMode
+                  ? 'flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-700'
+                  : 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50'
+              }
+            >
+              <X size={14} />
+              Nullstill
+            </button>
+          )}
+        </div>
+
+        {showAdvanced && (
+          <div className="grid grid-cols-2 gap-3 border-t border-slate-200/60 pt-3 dark:border-slate-700/60 sm:grid-cols-3 lg:grid-cols-4">
+            <select
+              className={`px-3 py-2 text-sm ${selectBase(isDarkMode)}`}
+              value={fuelFilter}
+              onChange={(e) => setFuelFilter(e.target.value)}
+            >
+              <option value="all">Alle drivstoff</option>
+              {uniqueFuels.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <select
+              className={`px-3 py-2 text-sm ${selectBase(isDarkMode)}`}
+              value={gearboxFilter}
+              onChange={(e) => setGearboxFilter(e.target.value)}
+            >
+              <option value="all">Alle girkasser</option>
+              {uniqueGearboxes.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+            <select
+              className={`px-3 py-2 text-sm ${selectBase(isDarkMode)}`}
+              value={sellerTypeFilter}
+              onChange={(e) => setSellerTypeFilter(e.target.value)}
+            >
+              <option value="all">Alle selgere</option>
+              {uniqueSellerTypes.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select
+              className={`px-3 py-2 text-sm ${selectBase(isDarkMode)}`}
+              value={colorFilter}
+              onChange={(e) => setColorFilter(e.target.value)}
+            >
+              <option value="all">Alle farger</option>
+              {uniqueColors.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select
+              className={`px-3 py-2 text-sm ${selectBase(isDarkMode)}`}
+              value={ownersFilter}
+              onChange={(e) => setOwnersFilter(e.target.value)}
+            >
+              <option value="all">Alle eiere</option>
+              <option value="1">1 eier</option>
+              <option value="2+">Flere eiere</option>
+            </select>
+            <div className="flex gap-2">
+              <input type="number" inputMode="numeric" placeholder="Pris fra" value={priceMin} onChange={(e) => setPriceMin(e.target.value)} className={`w-full px-3 py-2 text-sm ${selectBase(isDarkMode)}`} />
+              <input type="number" inputMode="numeric" placeholder="Pris til" value={priceMax} onChange={(e) => setPriceMax(e.target.value)} className={`w-full px-3 py-2 text-sm ${selectBase(isDarkMode)}`} />
+            </div>
+            <div className="flex gap-2">
+              <input type="number" inputMode="numeric" placeholder="År fra" value={yearMin} onChange={(e) => setYearMin(e.target.value)} className={`w-full px-3 py-2 text-sm ${selectBase(isDarkMode)}`} />
+              <input type="number" inputMode="numeric" placeholder="År til" value={yearMax} onChange={(e) => setYearMax(e.target.value)} className={`w-full px-3 py-2 text-sm ${selectBase(isDarkMode)}`} />
+            </div>
+            <div className="flex gap-2">
+              <input type="number" inputMode="numeric" placeholder="Km fra" value={kmMin} onChange={(e) => setKmMin(e.target.value)} className={`w-full px-3 py-2 text-sm ${selectBase(isDarkMode)}`} />
+              <input type="number" inputMode="numeric" placeholder="Km til" value={kmMax} onChange={(e) => setKmMax(e.target.value)} className={`w-full px-3 py-2 text-sm ${selectBase(isDarkMode)}`} />
+            </div>
+            <label className="col-span-2 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 sm:col-span-1">
+              <input type="checkbox" checked={onlyComplete} onChange={(e) => setOnlyComplete(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+              Kun komplette data
+            </label>
+            <label className="col-span-2 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 sm:col-span-1">
+              <input type="checkbox" checked={onlyWithImage} onChange={(e) => setOnlyWithImage(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+              Kun med bilde
+            </label>
+          </div>
         )}
       </div>
 
