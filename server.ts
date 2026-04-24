@@ -22,6 +22,7 @@ import nodemailer from 'nodemailer';
 import { initializeApp as initAdminApp, getApps, getApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
 import type { DocumentData, Firestore } from 'firebase-admin/firestore';
+import { createRateLimiter } from './src/lib/rate-limit';
 
 // Initialize Firebase in backend
 const firebaseConfig = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
@@ -82,6 +83,24 @@ function firestoreBackendReady(): boolean {
 }
 
 let scanSecretWarned = false;
+
+/**
+ * Scrape-trigger endpoints are protected by an in-memory fixed-window
+ * rate limiter (defense-in-depth against leaked secrets / replay loops).
+ * Keyed by `x-forwarded-for` (first hop) falling back to socket IP.
+ */
+const scanRateLimiter = createRateLimiter(5, 60_000);
+
+function clientIp(req: express.Request): string {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
+  if (Array.isArray(fwd) && fwd.length > 0) return fwd[0]!;
+  return req.socket.remoteAddress ?? 'unknown';
+}
+
+function scanRateLimitOk(req: express.Request): boolean {
+  return scanRateLimiter.allow(clientIp(req));
+}
 
 function scanRequestAuthorized(req: express.Request): boolean {
   const secret = process.env.SCAN_SECRET?.trim();
@@ -1304,6 +1323,10 @@ async function startServer() {
       res.status(401).json({ error: 'Ugyldig eller manglende x-scan-secret.' });
       return;
     }
+    if (!scanRateLimitOk(req)) {
+      res.status(429).json({ error: 'For mange forespørsler — prøv igjen om et minutt.' });
+      return;
+    }
     try {
       await runScraper();
       res.json({ ok: true, status: 'Scraper triggered' });
@@ -1325,6 +1348,10 @@ async function startServer() {
   expressApp.post('/api/trigger-github-scrape', async (req, res) => {
     if (!scanRequestAuthorized(req)) {
       res.status(401).json({ error: 'Ugyldig eller manglende x-scan-secret.' });
+      return;
+    }
+    if (!scanRateLimitOk(req)) {
+      res.status(429).json({ error: 'For mange forespørsler — prøv igjen om et minutt.' });
       return;
     }
     const token = process.env.GITHUB_TOKEN?.trim();
