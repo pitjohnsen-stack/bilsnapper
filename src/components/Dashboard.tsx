@@ -100,26 +100,33 @@ export default function Dashboard({
   const [activeTab, setActiveTab] = useState<'oversikt' | 'historikk'>('oversikt');
   const [scanning, setScanning] = useState(false);
 
-  const [brandFilter, setBrandFilter] = useState<string>('all');
-  const [modelFilter, setModelFilter] = useState<string>('all');
-  const [regionFilter, setRegionFilter] = useState<string>('all');
-  const [colorFilter, setColorFilter] = useState<string>('all');
-  const [ownersFilter, setOwnersFilter] = useState<string>('all');
-  const [fuelFilter, setFuelFilter] = useState<string>('all');
-  const [gearboxFilter, setGearboxFilter] = useState<string>('all');
-  const [sellerTypeFilter, setSellerTypeFilter] = useState<string>('all');
-  const [getaroundFilter, setGetaroundFilter] = useState<boolean>(false);
-  const [onlyComplete, setOnlyComplete] = useState<boolean>(false);
-  const [onlyWithImage, setOnlyWithImage] = useState<boolean>(false);
-  const [priceMin, setPriceMin] = useState<string>('');
-  const [priceMax, setPriceMax] = useState<string>('');
-  const [yearMin, setYearMin] = useState<string>('');
-  const [yearMax, setYearMax] = useState<string>('');
-  const [kmMin, setKmMin] = useState<string>('');
-  const [kmMax, setKmMax] = useState<string>('');
-  const [searchText, setSearchText] = useState<string>('');
-  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
-  const [sortBy, setSortBy] = useState<string>('savingKr');
+  // Les initial filter-state fra URL for delbare lenker
+  const initialParams = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search)
+    : new URLSearchParams();
+  const initStr = (k: string, d: string) => initialParams.get(k) ?? d;
+  const initBool = (k: string) => initialParams.get(k) === '1';
+
+  const [brandFilter, setBrandFilter] = useState<string>(initStr('brand', 'all'));
+  const [modelFilter, setModelFilter] = useState<string>(initStr('model', 'all'));
+  const [regionFilter, setRegionFilter] = useState<string>(initStr('region', 'all'));
+  const [colorFilter, setColorFilter] = useState<string>(initStr('color', 'all'));
+  const [ownersFilter, setOwnersFilter] = useState<string>(initStr('owners', 'all'));
+  const [fuelFilter, setFuelFilter] = useState<string>(initStr('fuel', 'all'));
+  const [gearboxFilter, setGearboxFilter] = useState<string>(initStr('gearbox', 'all'));
+  const [sellerTypeFilter, setSellerTypeFilter] = useState<string>(initStr('seller', 'all'));
+  const [getaroundFilter, setGetaroundFilter] = useState<boolean>(initBool('getaround'));
+  const [onlyComplete, setOnlyComplete] = useState<boolean>(initBool('complete'));
+  const [onlyWithImage, setOnlyWithImage] = useState<boolean>(initBool('withImage'));
+  const [priceMin, setPriceMin] = useState<string>(initStr('priceMin', ''));
+  const [priceMax, setPriceMax] = useState<string>(initStr('priceMax', ''));
+  const [yearMin, setYearMin] = useState<string>(initStr('yearMin', ''));
+  const [yearMax, setYearMax] = useState<string>(initStr('yearMax', ''));
+  const [kmMin, setKmMin] = useState<string>(initStr('kmMin', ''));
+  const [kmMax, setKmMax] = useState<string>(initStr('kmMax', ''));
+  const [searchText, setSearchText] = useState<string>(initStr('q', ''));
+  const [debouncedSearch, setDebouncedSearch] = useState<string>(initStr('q', ''));
+  const [sortBy, setSortBy] = useState<string>(initStr('sort', 'savingKr'));
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
   const GETAROUND_MAX_YEAR_AGE = 15;
@@ -135,6 +142,26 @@ export default function Dashboard({
     const t = setTimeout(() => setDebouncedSearch(searchText), 300);
     return () => clearTimeout(t);
   }, [searchText]);
+
+  // Synk filter-state til URL for delbare lenker
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams();
+    const put = (k: string, v: string) => { if (v && v !== 'all') params.set(k, v); };
+    const putBool = (k: string, v: boolean) => { if (v) params.set(k, '1'); };
+    put('brand', brandFilter); put('model', modelFilter); put('region', regionFilter);
+    put('color', colorFilter); put('owners', ownersFilter); put('fuel', fuelFilter);
+    put('gearbox', gearboxFilter); put('seller', sellerTypeFilter);
+    put('priceMin', priceMin); put('priceMax', priceMax);
+    put('yearMin', yearMin); put('yearMax', yearMax);
+    put('kmMin', kmMin); put('kmMax', kmMax);
+    put('q', debouncedSearch);
+    if (sortBy !== 'savingKr') put('sort', sortBy);
+    putBool('getaround', getaroundFilter); putBool('complete', onlyComplete); putBool('withImage', onlyWithImage);
+    const qs = params.toString();
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, '', newUrl);
+  }, [brandFilter, modelFilter, regionFilter, colorFilter, ownersFilter, fuelFilter, gearboxFilter, sellerTypeFilter, priceMin, priceMax, yearMin, yearMax, kmMin, kmMax, debouncedSearch, sortBy, getaroundFilter, onlyComplete, onlyWithImage]);
 
   useEffect(() => {
     const qStats = query(collection(db, 'market_statistics'), orderBy('calculatedAt', 'desc'), limit(50));
@@ -787,6 +814,17 @@ export default function Dashboard({
                   const savings = fair != null ? fair - car.price : null;
                   const isGoodDeal = savings != null && savings > 0;
                   const region = car.region || car.location;
+                  // Prisendring: kun siste endring av interesse
+                  const priceChange = (() => {
+                    const hist = Array.isArray(car.priceHistory) ? car.priceHistory : null;
+                    if (!hist || hist.length < 2) return null;
+                    const prev = hist[hist.length - 2]?.price;
+                    const now = hist[hist.length - 1]?.price;
+                    if (typeof prev !== 'number' || typeof now !== 'number' || prev === now) return null;
+                    const diff = now - prev;
+                    const pct = prev > 0 ? (diff / prev) * 100 : 0;
+                    return { diff, pct, down: diff < 0 };
+                  })();
                   return (
                     <article
                       key={car.id}
@@ -832,6 +870,16 @@ export default function Dashboard({
                           <span className="absolute bottom-3 left-3 flex items-center gap-1 rounded-md bg-black/50 px-2 py-0.5 text-xs text-white/90 backdrop-blur-sm">
                             <MapPin size={11} />
                             {region}
+                          </span>
+                        )}
+                        {priceChange && (
+                          <span
+                            className={`absolute left-3 top-3 flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold shadow-md ${
+                              priceChange.down ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+                            }`}
+                            title={`Prisendring: ${priceChange.diff > 0 ? '+' : ''}${priceChange.diff.toLocaleString('no-NO')} kr`}
+                          >
+                            {priceChange.down ? '↓' : '↑'} {Math.abs(Math.round(priceChange.pct))}%
                           </span>
                         )}
                       </div>
