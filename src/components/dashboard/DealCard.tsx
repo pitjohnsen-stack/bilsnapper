@@ -1,5 +1,8 @@
 import { Calendar, Car as CarIcon, CheckCircle, Gauge, Heart, MapPin, Palette, Sparkles, TrendingDown, TrendingUp, Users } from 'lucide-react';
 import type { Car } from '../../types/car';
+import { PriceSparkline } from './PriceSparkline';
+
+const NEW_AD_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 
 /**
  * Derive an inline price-change signal from `priceHistory` (last two entries)
@@ -29,6 +32,15 @@ export interface DealCardProps {
   isDarkMode: boolean;
   isWatched?: boolean;
   onToggleWatch?: (car: Car) => void;
+  isCompared?: boolean;
+  onToggleCompare?: (car: Car) => void;
+}
+
+function isFresh(adDate: Car['adDate']): boolean {
+  if (!adDate) return false;
+  const t = new Date(adDate).getTime();
+  if (!Number.isFinite(t)) return false;
+  return Date.now() - t < NEW_AD_WINDOW_MS;
 }
 
 function buildFinnUrl(car: Car): string {
@@ -37,7 +49,7 @@ function buildFinnUrl(car: Car): string {
   return id ? `https://www.finn.no/car/used/ad.html?finnkode=${id}` : '#';
 }
 
-export function DealCard({ car, isDarkMode, isWatched, onToggleWatch }: DealCardProps) {
+export function DealCard({ car, isDarkMode, isWatched, onToggleWatch, isCompared, onToggleCompare }: DealCardProps) {
   const km = car.mileage ?? car.km;
   const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
   const savings = fair != null ? fair - car.price : null;
@@ -46,6 +58,7 @@ export function DealCard({ car, isDarkMode, isWatched, onToggleWatch }: DealCard
   const eu = car.euApprovedUntil || car.euControl;
   const finnUrl = buildFinnUrl(car);
   const change = priceChange(car);
+  const fresh = isFresh(car.adDate);
 
   return (
     <article
@@ -86,6 +99,11 @@ export function DealCard({ car, isDarkMode, isWatched, onToggleWatch }: DealCard
             Mulig verdi
           </span>
         ) : null}
+        {fresh && (
+          <span className="absolute right-3 top-10 rounded-lg bg-sky-500/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md">
+            Nytt
+          </span>
+        )}
         {region && (
           <span className="absolute bottom-3 left-3 flex items-center gap-1 rounded-md bg-black/50 px-2 py-0.5 text-xs text-white/90 backdrop-blur-sm">
             <MapPin size={11} />
@@ -160,10 +178,29 @@ export function DealCard({ car, isDarkMode, isWatched, onToggleWatch }: DealCard
             </div>
           )}
         </div>
+        {car.priceHistory && car.priceHistory.length >= 2 && (
+          <div className="mb-3 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+            <span>Pristrend:</span>
+            <PriceSparkline car={car} />
+          </div>
+        )}
         <div className="flex items-center justify-between border-t border-slate-200/80 pt-4 dark:border-slate-700/80">
-          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-600 dark:bg-slate-900/80 dark:text-slate-300">
-            {car.sellerType ?? 'Ukjent selger'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-600 dark:bg-slate-900/80 dark:text-slate-300">
+              {car.sellerType ?? 'Ukjent selger'}
+            </span>
+            {onToggleCompare && (
+              <label className="flex cursor-pointer items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={!!isCompared}
+                  onChange={() => onToggleCompare(car)}
+                  className="h-3 w-3 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                />
+                Sammenlign
+              </label>
+            )}
+          </div>
           <a
             href={finnUrl}
             target="_blank"

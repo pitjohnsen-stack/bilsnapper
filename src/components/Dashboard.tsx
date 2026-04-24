@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { downloadDealsCsv } from '../lib/csvExport';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useDebounced } from '../hooks/useDebounced';
@@ -11,6 +11,7 @@ import type { mergeUserSettings } from '../types/userSettings';
 import type { Car } from '../types/car';
 import DashboardSkeleton from './DashboardSkeleton';
 import { AdvancedFilters } from './dashboard/AdvancedFilters';
+import { ComparePanel } from './dashboard/ComparePanel';
 import { DealsGrid } from './dashboard/DealsGrid';
 import { FilterBar } from './dashboard/FilterBar';
 import { HeaderActions } from './dashboard/HeaderActions';
@@ -52,6 +53,17 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
   const { watchedIds, toggleWatch } = useWatchlist(userId);
   const [activeTab, setActiveTab] = useState<Tab>('oversikt');
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  const [comparedIds, setComparedIds] = useState<Set<string>>(() => new Set());
+
+  const toggleCompare = useCallback((car: Car) => {
+    setComparedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(car.id)) next.delete(car.id);
+      else if (next.size < 4) next.add(car.id);
+      return next;
+    });
+  }, []);
+  const clearCompare = useCallback(() => setComparedIds(new Set()), []);
 
   const uniqueBrands = useMemo(
     () => dedupSorted(cars.map((c) => c.brand)),
@@ -129,6 +141,11 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
   );
 
   const reversedStats = useMemo(() => stats.slice().reverse(), [stats]);
+
+  const comparedCars = useMemo(
+    () => cars.filter((c) => comparedIds.has(c.id)),
+    [cars, comparedIds],
+  );
 
   const medianAcrossFilter =
     filteredStats.length && typeof filteredStats[0].medianPrice === 'number'
@@ -258,6 +275,14 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
             possibleDeals={possibleDeals}
             matchingCount={matchingDeals.length}
           />
+          {comparedCars.length > 0 && (
+            <ComparePanel
+              cars={comparedCars}
+              isDarkMode={isDarkMode}
+              onRemove={toggleCompare}
+              onClear={clearCompare}
+            />
+          )}
           <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
             <div className="space-y-6 lg:col-span-2">
               <div className="flex items-center justify-between">
@@ -282,6 +307,8 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
                 onToggleWatch={(c) =>
                   toggleWatch(c.id, { brand: c.brand, model: c.model, price: c.price })
                 }
+                comparedIds={comparedIds}
+                onToggleCompare={toggleCompare}
               />
             </div>
             <PriceCharts

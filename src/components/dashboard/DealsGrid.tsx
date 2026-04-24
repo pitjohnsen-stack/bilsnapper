@@ -8,9 +8,11 @@ export interface DealsGridProps {
   isDarkMode: boolean;
   watchedIds?: Set<string>;
   onToggleWatch?: (car: Car) => void;
+  comparedIds?: Set<string>;
+  onToggleCompare?: (car: Car) => void;
 }
 
-export function DealsGrid({ deals, isDarkMode, watchedIds, onToggleWatch }: DealsGridProps) {
+export function DealsGrid({ deals, isDarkMode, watchedIds, onToggleWatch, comparedIds, onToggleCompare }: DealsGridProps) {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {deals.map((car) => (
@@ -20,6 +22,8 @@ export function DealsGrid({ deals, isDarkMode, watchedIds, onToggleWatch }: Deal
           isDarkMode={isDarkMode}
           isWatched={watchedIds?.has(car.id)}
           onToggleWatch={onToggleWatch}
+          isCompared={comparedIds?.has(car.id)}
+          onToggleCompare={onToggleCompare}
         />
       ))}
       {deals.length === 0 && (
