@@ -6,13 +6,21 @@ import { DealCard } from './DealCard';
 export interface DealsGridProps {
   deals: Car[];
   isDarkMode: boolean;
+  watchedIds?: Set<string>;
+  onToggleWatch?: (car: Car) => void;
 }
 
-export function DealsGrid({ deals, isDarkMode }: DealsGridProps) {
+export function DealsGrid({ deals, isDarkMode, watchedIds, onToggleWatch }: DealsGridProps) {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {deals.map((car) => (
-        <DealCard key={car.id} car={car} isDarkMode={isDarkMode} />
+        <DealCard
+          key={car.id}
+          car={car}
+          isDarkMode={isDarkMode}
+          isWatched={watchedIds?.has(car.id)}
+          onToggleWatch={onToggleWatch}
+        />
       ))}
       {deals.length === 0 && (
         <div className={`col-span-2 flex flex-col items-center gap-4 py-20 ${cardClass(isDarkMode)}`}>
