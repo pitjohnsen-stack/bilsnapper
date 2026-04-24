@@ -118,6 +118,7 @@ export default function Dashboard({
   const [kmMin, setKmMin] = useState<string>('');
   const [kmMax, setKmMax] = useState<string>('');
   const [searchText, setSearchText] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('savingKr');
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
@@ -129,6 +130,11 @@ export default function Dashboard({
   ]);
   const currentYear = new Date().getFullYear();
   const getaroundMinYear = currentYear - GETAROUND_MAX_YEAR_AGE;
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchText), 300);
+    return () => clearTimeout(t);
+  }, [searchText]);
 
   useEffect(() => {
     const qStats = query(collection(db, 'market_statistics'), orderBy('calculatedAt', 'desc'), limit(50));
@@ -265,7 +271,7 @@ export default function Dashboard({
     const yMax = yearMax ? parseInt(yearMax, 10) : null;
     const kMin = kmMin ? parseInt(kmMin, 10) : null;
     const kMax = kmMax ? parseInt(kmMax, 10) : null;
-    const searchLower = searchText.trim().toLowerCase();
+    const searchLower = debouncedSearch.trim().toLowerCase();
 
     return deals.filter((car) => {
       const matchBrand = brandFilter === 'all' || car.brand === brandFilter;
@@ -318,12 +324,21 @@ export default function Dashboard({
 
       return true;
     });
-  }, [deals, brandFilter, modelFilter, regionFilter, colorFilter, ownersFilter, fuelFilter, gearboxFilter, sellerTypeFilter, getaroundFilter, getaroundMinYear, onlyComplete, onlyWithImage, priceMin, priceMax, yearMin, yearMax, kmMin, kmMax, searchText, prefs]);
+  }, [deals, brandFilter, modelFilter, regionFilter, colorFilter, ownersFilter, fuelFilter, gearboxFilter, sellerTypeFilter, getaroundFilter, getaroundMinYear, onlyComplete, onlyWithImage, priceMin, priceMax, yearMin, yearMax, kmMin, kmMax, debouncedSearch, prefs]);
 
   const sortedDeals = useMemo(() => {
     const arr = matchingDeals.slice();
-    const saving = (c: any) => (typeof c.fairPrice === 'number' ? c.fairPrice - c.price : -Infinity);
-    const savingPct = (c: any) => (typeof c.fairPrice === 'number' && c.fairPrice > 0 ? (c.fairPrice - c.price) / c.fairPrice : -Infinity);
+    // Bruk server-beregnede savingKr/savingPct/dealScore hvis tilgjengelig, ellers fallback
+    const saving = (c: any) => (
+      typeof c.savingKr === 'number' ? c.savingKr
+        : typeof c.fairPrice === 'number' ? c.fairPrice - c.price
+        : -Infinity
+    );
+    const savingPct = (c: any) => (
+      typeof c.savingPct === 'number' ? c.savingPct
+        : typeof c.fairPrice === 'number' && c.fairPrice > 0 ? (c.fairPrice - c.price) / c.fairPrice
+        : -Infinity
+    );
     const adTs = (c: any) => {
       const d = c.adDate ? new Date(c.adDate).getTime() : 0;
       return Number.isFinite(d) ? d : 0;
@@ -338,6 +353,7 @@ export default function Dashboard({
       case 'newest': arr.sort((a, b) => adTs(b) - adTs(a)); break;
       case 'confidence': arr.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)); break;
       case 'savingPct': arr.sort((a, b) => savingPct(b) - savingPct(a)); break;
+      case 'dealScore': arr.sort((a, b) => (b.dealScore ?? -1) - (a.dealScore ?? -1)); break;
       case 'savingKr':
       default: arr.sort((a, b) => saving(b) - saving(a)); break;
     }
@@ -583,6 +599,7 @@ export default function Dashboard({
             onChange={(e) => setSortBy(e.target.value)}
             title="Sortering"
           >
+            <option value="dealScore">Beste kupp (score)</option>
             <option value="savingKr">Størst besparelse (kr)</option>
             <option value="savingPct">Størst besparelse (%)</option>
             <option value="priceAsc">Pris ↑</option>
