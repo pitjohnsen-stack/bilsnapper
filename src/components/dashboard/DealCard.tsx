@@ -1,14 +1,22 @@
-import { Calendar, Car as CarIcon, CheckCircle, Gauge, Heart, MapPin, Palette, Sparkles, TrendingDown, TrendingUp, Users } from 'lucide-react';
+import type { Key } from 'react';
+import {
+  Calendar,
+  Car as CarIcon,
+  CheckCircle,
+  Gauge,
+  Heart,
+  MapPin,
+  Palette,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+  Users,
+} from 'lucide-react';
 import type { Car } from '../../types/car';
 import { PriceSparkline } from './PriceSparkline';
 
-const NEW_AD_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+const NEW_AD_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Derive an inline price-change signal from `priceHistory` (last two entries)
- * or the legacy `prevPrice` field. Returns null when the ad has no prior
- * snapshot to compare against.
- */
 function priceChange(car: Car): { delta: number; pct: number } | null {
   const hist = car.priceHistory;
   if (Array.isArray(hist) && hist.length >= 2) {
@@ -18,16 +26,19 @@ function priceChange(car: Car): { delta: number; pct: number } | null {
       return { delta: cur - prev, pct: prev > 0 ? (cur - prev) / prev : 0 };
     }
   }
+
   if (typeof car.prevPrice === 'number' && car.prevPrice !== car.price) {
     return {
       delta: car.price - car.prevPrice,
       pct: car.prevPrice > 0 ? (car.price - car.prevPrice) / car.prevPrice : 0,
     };
   }
+
   return null;
 }
 
 export interface DealCardProps {
+  key?: Key;
   car: Car;
   isDarkMode: boolean;
   isWatched?: boolean;
@@ -38,9 +49,9 @@ export interface DealCardProps {
 
 function isFresh(adDate: Car['adDate']): boolean {
   if (!adDate) return false;
-  const t = new Date(adDate).getTime();
-  if (!Number.isFinite(t)) return false;
-  return Date.now() - t < NEW_AD_WINDOW_MS;
+  const timestamp = new Date(adDate).getTime();
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp < NEW_AD_WINDOW_MS;
 }
 
 function buildFinnUrl(car: Car): string {
@@ -49,7 +60,14 @@ function buildFinnUrl(car: Car): string {
   return id ? `https://www.finn.no/car/used/ad.html?finnkode=${id}` : '#';
 }
 
-export function DealCard({ car, isDarkMode, isWatched, onToggleWatch, isCompared, onToggleCompare }: DealCardProps) {
+export function DealCard({
+  car,
+  isDarkMode,
+  isWatched,
+  onToggleWatch,
+  isCompared,
+  onToggleCompare,
+}: DealCardProps) {
   const km = car.mileage ?? car.km;
   const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
   const savings = fair != null ? fair - car.price : null;
@@ -92,7 +110,7 @@ export function DealCard({ car, isDarkMode, isWatched, onToggleWatch, isCompared
         {isGoodDeal ? (
           <span className="absolute right-3 top-3 flex items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1 text-xs font-bold text-slate-900 shadow-md">
             <Sparkles size={12} />
-            Spar {savings!.toLocaleString('no-NO')} kr
+            Spar {savings.toLocaleString('no-NO')} kr
           </span>
         ) : car.confidence ? (
           <span className="absolute right-3 top-3 rounded-lg bg-teal-600/90 px-2.5 py-1 text-xs font-bold text-white shadow-md">
@@ -113,7 +131,10 @@ export function DealCard({ car, isDarkMode, isWatched, onToggleWatch, isCompared
         {onToggleWatch && (
           <button
             type="button"
-            onClick={(e) => { e.preventDefault(); onToggleWatch(car); }}
+            onClick={(event) => {
+              event.preventDefault();
+              onToggleWatch(car);
+            }}
             aria-label={isWatched ? 'Fjern fra favoritter' : 'Legg til favoritter'}
             className={
               isWatched
@@ -149,7 +170,8 @@ export function DealCard({ car, isDarkMode, isWatched, onToggleWatch, isCompared
                 title={`Tidligere pris: ${Math.round(car.price - change.delta).toLocaleString('no-NO')} kr`}
               >
                 {change.delta < 0 ? <TrendingDown size={11} /> : <TrendingUp size={11} />}
-                {change.delta < 0 ? '' : '+'}{Math.round(change.delta).toLocaleString('no-NO')} kr ({(change.pct * 100).toFixed(1)}%)
+                {change.delta < 0 ? '' : '+'}
+                {Math.round(change.delta).toLocaleString('no-NO')} kr ({(change.pct * 100).toFixed(1)}%)
               </span>
             )}
           </div>

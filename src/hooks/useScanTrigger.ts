@@ -2,13 +2,20 @@ import { useCallback, useState } from 'react';
 
 type Toast = { type: 'ok' | 'error'; msg: string } | null;
 
-/**
- * Owns the "run a scan now" UX: endpoint selection (configured VITE_SCANNER_URL
- * vs. same-origin Vercel proxy to GitHub Actions), optimistic toast lifecycle,
- * and scanning/disabled state.
- *
- * The Vercel proxy exists so `GITHUB_TOKEN` never leaves the server.
- */
+async function readErrorMessage(response: Response): Promise<string> {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      const body = (await response.json()) as { error?: string; message?: string };
+      return body.error || body.message || `HTTP ${response.status}`;
+    } catch {
+      return `HTTP ${response.status}`;
+    }
+  }
+  const text = await response.text();
+  return text || `HTTP ${response.status}`;
+}
+
 export function useScanTrigger(): {
   scanning: boolean;
   toast: Toast;
@@ -37,16 +44,18 @@ export function useScanTrigger(): {
         if (secret) headers['x-scan-secret'] = secret;
         const res = await fetch(`${base}/scan`, { method: 'POST', headers, body: '{}' });
         if (!res.ok) {
-          const t = await res.text();
-          throw new Error(t || `HTTP ${res.status}`);
+          throw new Error(await readErrorMessage(res));
         }
-        showToast('ok', 'Scan er startet. Firestore oppdateres om noen minutter.');
+        showToast('ok', 'Scan er ferdig. Firestore er oppdatert med siste kjøring.');
         return;
       }
 
       const sameOriginBase = typeof window !== 'undefined' ? window.location.origin : '';
       if (!sameOriginBase) {
-        showToast('error', 'Ingen scan-server konfigurert. Scraperen kjører automatisk hvert 6. time.');
+        showToast(
+          'error',
+          'Ingen scan-server er konfigurert her. Kjør appen via server.ts eller sett VITE_SCANNER_URL.',
+        );
         return;
       }
       const proxyHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -58,14 +67,16 @@ export function useScanTrigger(): {
         body: '{}',
       });
       if (!res.ok) {
-        const t = await res.text();
         if (res.status === 503) {
-          showToast('error', 'Ingen scan-server konfigurert. Scraperen kjører automatisk hvert 6. time.');
+          showToast(
+            'error',
+            'Ingen scan-server er konfigurert her. Scraperen kjøres automatisk etter oppsettet på serveren.',
+          );
           return;
         }
-        throw new Error(t || `Proxy HTTP ${res.status}`);
+        throw new Error(await readErrorMessage(res));
       }
-      showToast('ok', 'Scan startet via GitHub Actions — resultater om ca. 5–15 min.');
+      showToast('ok', 'Scan startet via GitHub Actions. Resultater kommer når workflowen er ferdig.');
     } catch (e) {
       console.error(e);
       showToast('error', e instanceof Error ? e.message : 'Kunne ikke starte scan.');

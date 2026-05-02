@@ -34,7 +34,7 @@ export function HeaderActions({
           Markedsoversikt
         </h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Marked statistikk:{' '}
+          Markedsstatistikk:{' '}
           {statsCalculatedAt ? new Date(statsCalculatedAt).toLocaleString('no-NO') : '—'}
           {' · '}
           <span className="inline-flex items-center gap-1">
@@ -95,7 +95,7 @@ export function HeaderActions({
           {scanning ? (
             <>
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-              Starter…
+              Starter...
             </>
           ) : (
             'Kjør scan'

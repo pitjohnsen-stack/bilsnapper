@@ -35,7 +35,7 @@ export interface DashboardProps {
  * file small.
  */
 export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }: DashboardProps) {
-  const { cars, stats, lastScanLabel, loading } = useDashboardData();
+  const { cars, stats, lastScanLabel, loading, dataHint } = useDashboardData();
   const filters = useFiltersState(filtersFromParams(readInitialParams()));
   const debouncedSearch = useDebounced(filters.searchText, 300);
   useUrlSync({
@@ -192,6 +192,19 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
           role="status"
         >
           {toast.msg}
+        </div>
+      )}
+
+      {dataHint && (
+        <div
+          className={
+            isDarkMode
+              ? 'rounded-xl border border-slate-600/70 bg-slate-900/70 px-4 py-3 text-sm text-slate-200'
+              : 'rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700'
+          }
+          role="status"
+        >
+          {dataHint}
         </div>
       )}
 
