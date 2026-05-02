@@ -1,17 +1,15 @@
 import { useState } from 'react';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { Car, ChevronRight, Sparkles } from 'lucide-react';
-import type { UserSettings } from '../types/userSettings';
+import { db } from '../firebase';
 import { writeLocalUserSettingsPatch } from '../lib/localUserSettings';
+import type { UserSettings } from '../types/userSettings';
 
 type Props = {
   open: boolean;
   userId: string;
   isDarkMode: boolean;
-  /** Kall etter at valg er skrevet til localStorage — oppdaterer App slik at onboarding skjules med en gang */
   onAppliedLocally: () => void;
-  /** Firestore skriving feilet etter at modal allerede er lukket lokalt */
   onCloudSaveError: (message: string) => void;
 };
 
@@ -55,7 +53,7 @@ export default function OnboardingModal({
             : 'Kunne ikke lagre';
       const friendly =
         msg.includes('permission') || msg === 'permission-denied'
-          ? 'Skyinnstillinger er ikke tilgjengelige (Firestore). Valgene dine er lagret i denne nettleseren til admin har deployet regler til riktig database.'
+          ? 'Skyinnstillinger er ikke tilgjengelige i Firestore. Valgene dine er lagret i denne nettleseren til admin har satt opp riktig database og regler.'
           : `${msg}. Du kan prøve igjen under Innstillinger.`;
       onCloudSaveError(friendly);
     } finally {
@@ -65,12 +63,18 @@ export default function OnboardingModal({
 
   const finish = () => {
     const patch: Partial<UserSettings> = {
-      maxListPrice: maxPrice,
-      listLimit,
+      maxListPrice: Math.max(10_000, maxPrice || 350000),
+      listLimit: Math.min(100, Math.max(1, listLimit)),
       emailDigestInterest: digest,
       onboardingCompleted: true,
     };
-    writeLocalUserSettingsPatch(userId, patch);
+    const storedLocally = writeLocalUserSettingsPatch(userId, patch);
+    if (!storedLocally) {
+      onCloudSaveError(
+        'Lokale innstillinger kunne ikke lagres i nettleseren. Sjekk privat modus eller lagringsplass før du går videre.',
+      );
+      return;
+    }
     onAppliedLocally();
     void syncToCloud(patch);
   };
@@ -93,9 +97,9 @@ export default function OnboardingModal({
               Velkommen til Bruktbil-analytikeren
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-              Du får oversikt over aktive annonser, prisnivå fra scanneren og en enkel «mulig verdi» der
-              modellen tillater det. Dette er et beslutningsverktøy, ikke finansråd — sjekk alltid bilen og
-              selger på Finn.
+              Du får oversikt over aktive annonser, prisnivå fra scanneren og en enkel mulig verdi der
+              modellen tillater det. Dette er et beslutningsverktøy, ikke finansråd. Sjekk alltid bilen og
+              selgeren på Finn før du handler.
             </p>
             <div className="mt-6 flex justify-end gap-2">
               <button
@@ -116,7 +120,7 @@ export default function OnboardingModal({
             </div>
             <h2 className="text-xl font-bold">Dine standardgrenser</h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-              Vi filtrerer listen til deg. Du kan endre alt senere under innstillinger.
+              Vi filtrerer listen for deg. Du kan endre alt senere under Innstillinger.
             </p>
             <label className="mt-6 block text-sm font-medium">
               Maks pris i listen (kr)
@@ -151,7 +155,7 @@ export default function OnboardingModal({
                 onChange={(e) => setDigest(e.target.checked)}
                 className="h-4 w-4 rounded border-slate-400 text-teal-600"
               />
-              Jeg vil vite når e-postoppsummering lanseres (ingen e-post sendes ennå).
+              Jeg vil vite når e-postoppsummering lanseres. Ingen e-post sendes ennå.
             </label>
             <div className="mt-6 flex justify-between gap-2">
               <button
@@ -176,8 +180,8 @@ export default function OnboardingModal({
           <>
             <h2 className="text-xl font-bold">Alt klart</h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-              Du kan kjøre en ny scan fra dashboardet når som helst (hvis administrator har satt opp
-              server-URL). Data friskes når scan siste gang ble fullført — se banner øverst.
+              Du kan kjøre en ny scan fra dashboardet når som helst hvis administrator har satt opp
+              scan-serveren. Dataene oppdateres når siste scan er fullført.
             </p>
             <div className="mt-6 flex justify-between gap-2">
               <button
@@ -193,7 +197,7 @@ export default function OnboardingModal({
                 onClick={finish}
                 className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-500 disabled:opacity-60"
               >
-                {saving ? 'Synkroniserer…' : 'Åpne dashboard'}
+                {saving ? 'Synkroniserer...' : 'Åpne dashboard'}
               </button>
             </div>
           </>

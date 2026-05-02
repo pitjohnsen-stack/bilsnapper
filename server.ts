@@ -116,7 +116,8 @@ function scanRequestAuthorized(req: express.Request): boolean {
     // In production, deny when secret is missing. In dev, allow for convenience.
     return process.env.NODE_ENV !== 'production';
   }
-  return req.headers['x-scan-secret'] === secret;
+  const querySecret = typeof req.query.scanSecret === 'string' ? req.query.scanSecret : '';
+  return req.headers['x-scan-secret'] === secret || querySecret === secret;
 }
 
 // Authenticate Backend: foretrekk Firebase Admin (service account). Ellers SCRAPER_EMAIL + SCRAPER_PASSWORD (client SDK).
@@ -1339,6 +1340,17 @@ async function startServer() {
   /** Frontend (VITE_SCANNER_URL) forventer POST /scan — samme som /api/trigger-scraper */
   expressApp.post('/scan', triggerScraperHandler);
   expressApp.post('/api/trigger-scraper', triggerScraperHandler);
+  expressApp.post('/api/trigger-github-scrape', triggerScraperHandler);
+  expressApp.get('/api/trigger-github-scrape', (req, res) => {
+    if (!scanRequestAuthorized(req)) {
+      res.status(401).json({ error: 'Ugyldig eller manglende scan-secret.' });
+      return;
+    }
+    res.json({
+      ok: true,
+      message: 'Bruk POST /scan eller POST /api/trigger-github-scrape for å starte scan.',
+    });
+  });
 
   /**
    * Proxy for GitHub Actions workflow_dispatch. Holder GITHUB_TOKEN server-side
@@ -1404,7 +1416,10 @@ async function startServer() {
 
   expressApp.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    if (process.env.RUN_SCRAPER_ON_START !== 'false') {
+    const shouldRunOnStart =
+      process.env.RUN_SCRAPER_ON_START === 'true' ||
+      (process.env.NODE_ENV === 'production' && process.env.RUN_SCRAPER_ON_START !== 'false');
+    if (shouldRunOnStart) {
       void runScraper();
     }
   });

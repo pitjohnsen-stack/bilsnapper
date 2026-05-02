@@ -14,11 +14,12 @@ export function readLocalUserSettingsPatch(uid: string): Partial<UserSettings> |
   }
 }
 
-export function writeLocalUserSettingsPatch(uid: string, patch: Partial<UserSettings>) {
+export function writeLocalUserSettingsPatch(uid: string, patch: Partial<UserSettings>): boolean {
   try {
     const prev = readLocalUserSettingsPatch(uid) || {};
     localStorage.setItem(key(uid), JSON.stringify({ ...prev, ...patch }));
+    return true;
   } catch {
-    /* private mode / full disk */
+    return false;
   }
 }

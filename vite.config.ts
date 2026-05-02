@@ -1,9 +1,9 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig(({mode}) => {
+export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
@@ -18,19 +18,23 @@ export default defineConfig(({mode}) => {
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       hmr: process.env.DISABLE_HMR !== 'true',
+      proxy: {
+        '/scan': 'http://localhost:3000',
+        '/api': 'http://localhost:3000',
+      },
     },
     build: {
+      chunkSizeWarningLimit: 600,
       rollupOptions: {
         output: {
-          manualChunks: {
-            // Isoler tunge biblioteker i egne chunks for bedre caching + raskere initial load
-            recharts: ['recharts'],
-            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
-            vendor: ['react', 'react-dom', 'lucide-react'],
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('firebase')) return 'firebase';
+            if (id.includes('recharts') || id.includes('d3-')) return 'charts';
+            return undefined;
           },
         },
       },
-      chunkSizeWarningLimit: 600,
     },
   };
 });

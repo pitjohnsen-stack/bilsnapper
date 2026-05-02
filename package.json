@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:quiet": "powershell -NoProfile -Command \"$env:RUN_SCRAPER_ON_START='false'; tsx server.ts\"",
     "start": "tsx server.ts",
     "scrape": "tsx server.ts --scrape-only",
     "build": "vite build",
     "preview": "vite preview",
+    "preview:server": "powershell -NoProfile -Command \"$env:NODE_ENV='production'; $env:RUN_SCRAPER_ON_START='false'; tsx server.ts\"",
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",

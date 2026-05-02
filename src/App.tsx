@@ -1,15 +1,73 @@
-import { useEffect, useMemo, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { auth, logout, loginWithGoogle, db } from './firebase';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Car, Bell, LogOut, HelpCircle, Settings, X } from 'lucide-react';
-import Dashboard from './components/Dashboard';
-import OnboardingModal from './components/OnboardingModal';
-import SettingsModal from './components/SettingsModal';
-import HelpLegalModal from './components/HelpLegalModal';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { Bell, Car, HelpCircle, LogOut, Settings, X } from 'lucide-react';
+import { auth, db, loginWithGoogle, logout } from './firebase';
+import { readLocalUserSettingsPatch } from './lib/localUserSettings';
 import type { UserSettings } from './types/userSettings';
 import { mergeUserSettings } from './types/userSettings';
-import { readLocalUserSettingsPatch } from './lib/localUserSettings';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const HelpLegalModal = lazy(() => import('./components/HelpLegalModal'));
+const OnboardingModal = lazy(() => import('./components/OnboardingModal'));
+const SettingsModal = lazy(() => import('./components/SettingsModal'));
+
+function getFirebaseErrorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error ? String((error as { code: string }).code) : '';
+}
+
+function getCloudSettingsHint(error: unknown): { message: string; fatal: boolean } {
+  const code = getFirebaseErrorCode(error);
+  if (code === 'resource-exhausted') {
+    return {
+      message:
+        'Firestore-kvoten er brukt opp for dagen. Appen bruker lokale innstillinger fra nettleseren til kvoten er tilbake eller prosjektet er oppgradert.',
+      fatal: true,
+    };
+  }
+  if (code === 'permission-denied') {
+    return {
+      message:
+        'Skyinnstillinger kunne ikke leses fra Firestore. Appen bruker lokale innstillinger i denne nettleseren til regler eller database er riktig satt opp.',
+      fatal: true,
+    };
+  }
+  if (code === 'unauthenticated') {
+    return {
+      message: 'Økta er utløpt. Logg ut og inn igjen for å synke innstillingene dine.',
+      fatal: true,
+    };
+  }
+  if (code === 'unavailable') {
+    return {
+      message:
+        'Firestore er midlertidig utilgjengelig. Appen bruker lokale innstillinger i denne nettleseren i mellomtiden.',
+      fatal: false,
+    };
+  }
+  return {
+    message:
+      'Skyinnstillinger kunne ikke leses. Appen bruker lokale innstillinger i denne nettleseren til forbindelsen er tilbake.',
+    fatal: true,
+  };
+}
+
+function FullPageSpinner() {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950">
+      <div className="h-12 w-12 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
+      <p className="text-sm text-slate-400">Laster...</p>
+    </div>
+  );
+}
+
+function SectionSpinner() {
+  return (
+    <div className="flex justify-center py-24">
+      <div className="h-10 w-10 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
+    </div>
+  );
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -20,9 +78,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpTab, setHelpTab] = useState<'faq' | 'privacy' | 'terms'>('faq');
-  /** Sikrer ny lesing av localStorage etter onboarding / lokale innstillinger */
   const [settingsLocalRev, setSettingsLocalRev] = useState(0);
   const [cloudSettingsHint, setCloudSettingsHint] = useState<string | null>(null);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -42,24 +100,35 @@ export default function App() {
       return;
     }
     const ref = doc(db, 'user_settings', user.uid);
-    const unsubscribe = onSnapshot(
+    let unsubscribe: (() => void) | null = null;
+    unsubscribe = onSnapshot(
       ref,
       (snap) => {
+        setCloudSettingsHint(null);
         setRawUserSettings(snap.exists() ? (snap.data() as Partial<UserSettings>) : {});
       },
       (err) => {
-        console.error('user_settings lytting feilet:', err);
-        // Unngå evig spinner ved permission/nettverk/feil database — bruk standardinnstillinger
+        const { message, fatal } = getCloudSettingsHint(err);
+        console.warn('user_settings lytting feilet:', err);
+        setCloudSettingsHint(message);
         setRawUserSettings({});
+        if (fatal && unsubscribe) {
+          unsubscribe();
+          unsubscribe = null;
+        }
       },
     );
-    return () => unsubscribe();
+    return () => {
+      unsubscribe?.();
+    };
   }, [user]);
 
-  /** Om Firestore aldri svarer (sjeldent), ikke lås brukeren på spinner */
   useEffect(() => {
     if (!user || rawUserSettings !== undefined) return;
     const t = window.setTimeout(() => {
+      setCloudSettingsHint(
+        'Skyinnstillinger svarte ikke i tide. Appen bruker lokale standardinnstillinger til Firestore svarer igjen.',
+      );
       setRawUserSettings((prev) => (prev === undefined ? {} : prev));
     }, 12000);
     return () => window.clearTimeout(t);
@@ -70,15 +139,13 @@ export default function App() {
     return readLocalUserSettingsPatch(user.uid);
   }, [user, settingsLocalRev]);
 
-  /** Sky vinner på felt som finnes der; «ferdig onboarding» er true om enten lokal eller sky sier det */
   const mergedRawUserSettings = useMemo((): Partial<UserSettings> | undefined => {
     if (rawUserSettings === undefined) return undefined;
-    const l = localPatch || {};
     return {
-      ...l,
+      ...(localPatch || {}),
       ...rawUserSettings,
       onboardingCompleted:
-        rawUserSettings.onboardingCompleted === true || l.onboardingCompleted === true,
+        rawUserSettings.onboardingCompleted === true || localPatch?.onboardingCompleted === true,
     };
   }, [rawUserSettings, localPatch]);
 
@@ -90,12 +157,7 @@ export default function App() {
   const showOnboarding = Boolean(user && prefs && !prefs.onboardingCompleted);
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950">
-        <div className="h-12 w-12 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
-        <p className="text-sm text-slate-400">Laster…</p>
-      </div>
-    );
+    return <FullPageSpinner />;
   }
 
   if (!user) {
@@ -112,16 +174,23 @@ export default function App() {
           <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-400 to-teal-700 text-white shadow-lg shadow-teal-900/40">
             <Car size={32} strokeWidth={1.75} />
           </div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-teal-400/90">Markedsintelligens</p>
-          <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">Bruktbil-analytikeren</h1>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-teal-400/90">
+            Markedsintelligens
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+            Bruktbil-analytikeren
+          </h1>
           <p className="mt-3 text-sm leading-relaxed text-slate-400">
-            Sanntidsdata, prismodell og «kupp» fra markedet — beskyttet med Google-innlogging.
+            Sanntidsdata, prismodell og mulige kupp fra markedet, beskyttet med Google-innlogging.
           </p>
           <p className="mt-4 text-xs text-slate-500">
-            Ved innlogging godtar du vilkår og personvernerklæring — se «Hjelp» etter innlogging.
+            Ved innlogging godtar du vilkår og personvernerklæring. Se Hjelp etter innlogging.
           </p>
           {loginError ? (
-            <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-950/40 px-3 py-2 text-left text-sm text-amber-200" role="alert">
+            <p
+              className="mt-4 rounded-lg border border-amber-500/30 bg-amber-950/40 px-3 py-2 text-left text-sm text-amber-200"
+              role="alert"
+            >
               {loginError}
             </p>
           ) : null}
@@ -165,7 +234,7 @@ export default function App() {
             Logg inn med Google
           </button>
           <p className="mt-4 text-xs text-slate-500">
-            Godkjenn domenet ditt under Firebase → Authentication → Settings → Authorized domains.
+            Godkjenn domenet ditt under Firebase Authentication og Authorized domains.
           </p>
         </div>
       </div>
@@ -175,7 +244,9 @@ export default function App() {
   return (
     <div
       className={
-        isDarkMode ? 'flex min-h-screen flex-col bg-slate-950 text-slate-100' : 'flex min-h-screen flex-col bg-slate-50 text-slate-900'
+        isDarkMode
+          ? 'flex min-h-screen flex-col bg-slate-950 text-slate-100'
+          : 'flex min-h-screen flex-col bg-slate-50 text-slate-900'
       }
     >
       <nav
@@ -185,21 +256,21 @@ export default function App() {
             : 'sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur-md'
         }
       >
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 text-white shadow-md shadow-teal-900/25">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-teal-700 text-white shadow-md shadow-teal-900/25">
               <Car size={22} strokeWidth={1.75} />
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="block text-sm font-semibold leading-tight text-teal-600 dark:text-teal-400">
                 Markedskart
               </span>
-              <span className="hidden text-base font-bold tracking-tight text-slate-900 dark:text-white sm:block">
+              <span className="block truncate text-sm font-bold tracking-tight text-slate-900 dark:text-white sm:text-base">
                 Bruktbil-analytikeren
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-1 sm:gap-2">
+          <div className="flex w-full flex-wrap items-center justify-end gap-1 sm:w-auto sm:gap-2">
             <button
               type="button"
               onClick={() => {
@@ -235,7 +306,7 @@ export default function App() {
                   ? 'cursor-default rounded-full p-2.5 text-slate-600 opacity-40'
                   : 'cursor-default rounded-full p-2.5 text-slate-300 opacity-60'
               }
-              aria-label="Varsler (kommer snart)"
+              aria-label="Varsler kommer snart"
               aria-disabled="true"
               tabIndex={-1}
             >
@@ -295,16 +366,16 @@ export default function App() {
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
         {prefs ? (
-          <Dashboard
-            isDarkMode={isDarkMode}
-            toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-            userId={user.uid}
-            prefs={prefs}
-          />
+          <Suspense fallback={<SectionSpinner />}>
+            <Dashboard
+              isDarkMode={isDarkMode}
+              toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+              userId={user.uid}
+              prefs={prefs}
+            />
+          </Suspense>
         ) : (
-          <div className="flex justify-center py-24">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-teal-500/30 border-t-teal-400" />
-          </div>
+          <SectionSpinner />
         )}
       </main>
 
@@ -324,7 +395,7 @@ export default function App() {
               setHelpOpen(true);
             }}
           >
-            Hjelp & FAQ
+            Hjelp og FAQ
           </button>
           <button
             type="button"
@@ -346,25 +417,34 @@ export default function App() {
           >
             Vilkår
           </button>
-          <span className="text-slate-400">Data til veiledning — ikke finansråd.</span>
+          <span className="text-slate-400">Data til veiledning, ikke finansråd.</span>
         </div>
       </footer>
 
-      <OnboardingModal
-        open={showOnboarding}
-        userId={user.uid}
-        isDarkMode={isDarkMode}
-        onAppliedLocally={() => setSettingsLocalRev((n) => n + 1)}
-        onCloudSaveError={(msg) => setCloudSettingsHint(msg)}
-      />
-      <SettingsModal
-        open={settingsOpen}
-        userId={user.uid}
-        isDarkMode={isDarkMode}
-        remote={mergedRawUserSettings ?? null}
-        onClose={() => setSettingsOpen(false)}
-      />
-      <HelpLegalModal open={helpOpen} isDarkMode={isDarkMode} initialTab={helpTab} onClose={() => setHelpOpen(false)} />
+      <Suspense fallback={null}>
+        <OnboardingModal
+          open={showOnboarding}
+          userId={user.uid}
+          isDarkMode={isDarkMode}
+          onAppliedLocally={() => setSettingsLocalRev((n) => n + 1)}
+          onCloudSaveError={(msg) => setCloudSettingsHint(msg)}
+        />
+        <SettingsModal
+          open={settingsOpen}
+          userId={user.uid}
+          isDarkMode={isDarkMode}
+          remote={mergedRawUserSettings ?? null}
+          onClose={() => setSettingsOpen(false)}
+          onAppliedLocally={() => setSettingsLocalRev((n) => n + 1)}
+          onCloudSaveError={(msg) => setCloudSettingsHint(msg)}
+        />
+        <HelpLegalModal
+          open={helpOpen}
+          isDarkMode={isDarkMode}
+          initialTab={helpTab}
+          onClose={() => setHelpOpen(false)}
+        />
+      </Suspense>
     </div>
   );
 }

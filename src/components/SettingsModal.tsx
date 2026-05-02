@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
 import { X } from 'lucide-react';
+import { db } from '../firebase';
+import { writeLocalUserSettingsPatch } from '../lib/localUserSettings';
 import type { UserSettings } from '../types/userSettings';
 import { mergeUserSettings } from '../types/userSettings';
 
@@ -11,28 +12,41 @@ type Props = {
   isDarkMode: boolean;
   remote: Partial<UserSettings> | null;
   onClose: () => void;
+  onAppliedLocally: () => void;
+  onCloudSaveError: (message: string) => void;
 };
 
-export default function SettingsModal({ open, userId, isDarkMode, remote, onClose }: Props) {
-  const m = mergeUserSettings(remote);
-  const [maxListPrice, setMaxListPrice] = useState(m.maxListPrice);
-  const [minSavingKr, setMinSavingKr] = useState(m.minSavingKr?.toString() ?? '');
-  const [onlyBelowFair, setOnlyBelowFair] = useState(m.onlyBelowFair);
-  const [minConfidence, setMinConfidence] = useState(m.minConfidence?.toString() ?? '');
-  const [listLimit, setListLimit] = useState(m.listLimit);
-  const [emailDigestInterest, setEmailDigestInterest] = useState(m.emailDigestInterest);
+export default function SettingsModal({
+  open,
+  userId,
+  isDarkMode,
+  remote,
+  onClose,
+  onAppliedLocally,
+  onCloudSaveError,
+}: Props) {
+  const merged = mergeUserSettings(remote);
+  const [maxListPrice, setMaxListPrice] = useState(merged.maxListPrice);
+  const [minSavingKr, setMinSavingKr] = useState(merged.minSavingKr?.toString() ?? '');
+  const [onlyBelowFair, setOnlyBelowFair] = useState(merged.onlyBelowFair);
+  const [minConfidence, setMinConfidence] = useState(merged.minConfidence?.toString() ?? '');
+  const [listLimit, setListLimit] = useState(merged.listLimit);
+  const [emailDigestInterest, setEmailDigestInterest] = useState(merged.emailDigestInterest);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedLocally, setSavedLocally] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    const x = mergeUserSettings(remote);
-    setMaxListPrice(x.maxListPrice);
-    setMinSavingKr(x.minSavingKr?.toString() ?? '');
-    setOnlyBelowFair(x.onlyBelowFair);
-    setMinConfidence(x.minConfidence?.toString() ?? '');
-    setListLimit(x.listLimit);
-    setEmailDigestInterest(x.emailDigestInterest);
+    const next = mergeUserSettings(remote);
+    setMaxListPrice(next.maxListPrice);
+    setMinSavingKr(next.minSavingKr?.toString() ?? '');
+    setOnlyBelowFair(next.onlyBelowFair);
+    setMinConfidence(next.minConfidence?.toString() ?? '');
+    setListLimit(next.listLimit);
+    setEmailDigestInterest(next.emailDigestInterest);
+    setSaveError(null);
+    setSavedLocally(false);
   }, [open, remote]);
 
   if (!open) return null;
@@ -45,28 +59,45 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
     ? 'mt-1 w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-white'
     : 'mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2';
 
+  const buildPatch = (): Partial<UserSettings> => ({
+    maxListPrice: Math.max(10_000, Number(maxListPrice) || merged.maxListPrice),
+    minSavingKr: minSavingKr.trim() === '' ? null : Math.max(0, parseInt(minSavingKr, 10) || 0),
+    onlyBelowFair,
+    minConfidence:
+      minConfidence.trim() === '' ? null : Math.min(1, Math.max(0, parseFloat(minConfidence) || 0)),
+    listLimit: Math.min(100, Math.max(1, Number(listLimit) || merged.listLimit)),
+    emailDigestInterest,
+  });
+
   const save = async () => {
     setSaving(true);
     setSaveError(null);
+    setSavedLocally(false);
+    const patch = buildPatch();
     try {
-      const minS = minSavingKr.trim() === '' ? null : Math.max(0, parseInt(minSavingKr, 10) || 0);
-      const minC = minConfidence.trim() === '' ? null : Math.min(1, Math.max(0, parseFloat(minConfidence) || 0));
       await setDoc(
         doc(db, 'user_settings', userId),
         {
-          maxListPrice,
-          minSavingKr: minS,
-          onlyBelowFair,
-          minConfidence: minC,
-          listLimit: Math.min(100, Math.max(1, listLimit)),
-          emailDigestInterest,
+          ...patch,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
       );
+      writeLocalUserSettingsPatch(userId, patch);
+      onAppliedLocally();
       onClose();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Lagring feilet — prøv igjen.');
+      const saved = writeLocalUserSettingsPatch(userId, patch);
+      if (saved) {
+        setSavedLocally(true);
+        onAppliedLocally();
+        onCloudSaveError(
+          'Skyinnstillinger kunne ikke lagres akkurat nå. Endringene dine er lagret lokalt i denne nettleseren.',
+        );
+        setSaveError('Skyinnstillinger kunne ikke lagres. Endringene er lagret lokalt i denne nettleseren.');
+      } else {
+        setSaveError(err instanceof Error ? err.message : 'Lagring feilet. Prøv igjen.');
+      }
     } finally {
       setSaving(false);
     }
@@ -74,7 +105,7 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-      <div className={panel} role="dialog" aria-labelledby="settings-title">
+      <div className={panel} role="dialog" aria-labelledby="settings-title" aria-modal="true">
         <div className="mb-4 flex items-center justify-between">
           <h2 id="settings-title" className="text-lg font-bold">
             Innstillinger
@@ -90,13 +121,20 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
         </div>
 
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Gjelder utvalget i annonselisten og eksportert CSV. Statistikk og grupper følger fortsatt
-          datafilteret over listen.
+          Gjelder annonselisten og eksportert CSV. Markedsstatistikk bruker egne datasett og kan derfor
+          avvike fra listen under.
         </p>
 
         <label className="mt-4 block text-sm font-medium">
           Maks pris i listen (kr)
-          <input type="number" className={input} min={10000} step={1000} value={maxListPrice} onChange={(e) => setMaxListPrice(Number(e.target.value))} />
+          <input
+            type="number"
+            className={input}
+            min={10000}
+            step={1000}
+            value={maxListPrice}
+            onChange={(e) => setMaxListPrice(Number(e.target.value))}
+          />
         </label>
 
         <label className="mt-4 block text-sm font-medium">
@@ -118,11 +156,11 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
             checked={onlyBelowFair}
             onChange={(e) => setOnlyBelowFair(e.target.checked)}
           />
-          Kun vis der pris er under estimert «fair» pris (krever at modellen har beregnet verdi)
+          Vis bare biler som ligger under estimert fair pris
         </label>
 
         <label className="mt-4 block text-sm font-medium">
-          Min. besparelse mot fair price (kr, valgfritt)
+          Min. besparelse mot fair pris (kr, valgfritt)
           <input
             type="number"
             className={input}
@@ -135,7 +173,7 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
         </label>
 
         <label className="mt-4 block text-sm font-medium">
-          Min. modelconfidence 0–1 (valgfritt)
+          Min. modellscore 0-1 (valgfritt)
           <input
             type="number"
             step="0.05"
@@ -155,12 +193,19 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
             checked={emailDigestInterest}
             onChange={(e) => setEmailDigestInterest(e.target.checked)}
           />
-          Varsle meg når e-post / varsler lanseres
+          Varsle meg når e-post og varsler lanseres
         </label>
 
         {saveError && (
           <p className="mt-4 rounded-lg border border-red-500/30 bg-red-950/30 px-3 py-2 text-sm text-red-300">
             {saveError}
+          </p>
+        )}
+
+        {savedLocally && (
+          <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-sm text-amber-100">
+            Endringene er lagret lokalt i nettleseren og synkroniseres til skyen når Firestore er
+            tilgjengelig igjen.
           </p>
         )}
 
@@ -178,7 +223,7 @@ export default function SettingsModal({ open, userId, isDarkMode, remote, onClos
             onClick={save}
             className="rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500 disabled:opacity-60"
           >
-            {saving ? 'Lagrer…' : 'Lagre'}
+            {saving ? 'Lagrer...' : 'Lagre'}
           </button>
         </div>
       </div>

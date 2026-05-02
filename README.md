@@ -1,20 +1,39 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Bilsnapper
 
-# Run and deploy your AI Studio app
+Frontend og lokal server for innlogging, dashboard, scan-triggering og Finn/Firestore-integrasjon.
 
-This contains everything you need to run your app locally.
+## Lokalt oppsett
 
-View your app in AI Studio: https://ai.studio/apps/724f6025-f227-47f5-978b-3fcd3f2803d3
+1. Installer avhengigheter med `npm install`
+2. Sørg for at `firebase-applet-config.json` peker til riktig Firebase-prosjekt og database
+3. Sett eventuelle `VITE_*`-variabler og `SCAN_SECRET` i miljøet hvis du trenger egen scanner-URL eller beskyttet scan-endepunkt
 
-## Run Locally
+## Kommandoer
 
-**Prerequisites:**  Node.js
+- `npm run dev`
+  Starter appen via `server.ts`
+- `npm run dev:quiet`
+  Starter appen via `server.ts` uten å kjøre scraper automatisk ved oppstart
+- `npm run scrape`
+  Kjører bare scraperen én gang
+- `npm run build`
+  Bygger frontend for produksjon
+- `npm run preview`
+  Vite preview av bare frontend-bygget
+- `npm run preview:server`
+  Kjører produksjonsserveren lokalt mot `dist/` uten auto-scan
+- `npm run lint`
+  Typecheck med `tsc --noEmit`
 
+## Viktig om scan-knappen
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- Same-origin scan virker når appen kjøres gjennom `server.ts`
+- Hvis du kun kjører `vite preview`, finnes ikke scan-rutene
+- Hvis scan-backenden ligger et annet sted, sett `VITE_SCANNER_URL`
+- Hvis du kjører ren Vite-dev på port 5173, proxier Vite nå `/scan` og `/api` til `localhost:3000`
+
+## Viktig om Firestore
+
+- Dashboard, onboarding og settings leser fra `user_settings`, `cars`, `market_statistics` og `scans/latest`
+- Ved Firestore-feil degraderer appen til lokale innstillinger i nettleseren
+- Hvis du får `permission-denied`, sjekk både `firestore.rules` og at riktig `firestoreDatabaseId` er valgt

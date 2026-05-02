@@ -7,7 +7,7 @@ coverage/
 .env*
 !.env.example
 
-# Firebase Admin SDK (service account) — aldri commit
+# Firebase Admin SDK (service account) - aldri commit
 firebase-adminsdk.json
 serviceAccountKey.json
 service-account.json
@@ -17,3 +17,6 @@ service-account.json
 
 # Gammel nested kopi (samme navn under rot). Slett mappa når Cursor/Utforsker ikke låser den.
 /bilsnapper-main/
+
+# Lokale agent-artifakter (Claude/Cursor worktrees, innstillinger)
+.claude/
