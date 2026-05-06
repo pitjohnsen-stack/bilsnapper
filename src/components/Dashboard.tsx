@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { downloadDealsCsv } from '../lib/csvExport';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useDebounced } from '../hooks/useDebounced';
+import { useArchiveCar } from '../hooks/useArchiveCar';
 import { filtersFromParams, useFiltersState } from '../hooks/useFiltersState';
 import { useFilteredSortedDeals } from '../hooks/useFilteredSortedDeals';
 import { useScanTrigger } from '../hooks/useScanTrigger';
@@ -50,6 +51,7 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
     q: debouncedSearch, sort: filters.sortBy,
   });
   const { scanning, toast, triggerScraper } = useScanTrigger();
+  const { archivingIds, archiveToast, archiveCar, checkFinnLink } = useArchiveCar();
   const { watchedIds, toggleWatch } = useWatchlist(userId);
   const [activeTab, setActiveTab] = useState<Tab>('oversikt');
   const [onlyFavorites, setOnlyFavorites] = useState(false);
@@ -168,7 +170,7 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
     return (
       saving != null &&
       saving > 0 &&
-      (c.modelSampleSize ?? 0) >= 5 &&
+      (c.comparableSampleSize ?? 0) >= 5 &&
       (typeof c.confidence !== 'number' || c.confidence >= 0.3)
     );
   }).length;
@@ -193,16 +195,16 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
         lastScanLabel={lastScanLabel}
       />
 
-      {toast && (
+      {(toast || archiveToast) && (
         <div
           className={
-            toast.type === 'ok'
+            (toast || archiveToast)?.type === 'ok'
               ? 'rounded-xl border border-teal-500/30 bg-teal-950/30 px-4 py-3 text-sm text-teal-100 dark:text-teal-200'
               : 'rounded-xl border border-red-500/30 bg-red-950/30 px-4 py-3 text-sm text-red-200'
           }
           role="status"
         >
-          {toast.msg}
+          {(toast || archiveToast)?.msg}
         </div>
       )}
 
@@ -333,6 +335,9 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
                 }
                 comparedIds={comparedIds}
                 onToggleCompare={toggleCompare}
+                archivingIds={archivingIds}
+                onArchive={archiveCar}
+                onCheckFinnLink={checkFinnLink}
               />
             </div>
             <PriceCharts

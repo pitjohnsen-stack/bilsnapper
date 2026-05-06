@@ -23,6 +23,7 @@ import nodemailer from 'nodemailer';
 import { initializeApp as initAdminApp, getApps, getApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore as getAdminFirestore, FieldValue } from 'firebase-admin/firestore';
 import type { DocumentData, Firestore } from 'firebase-admin/firestore';
+import { ANALYSIS_VERSION, buildMarketAnalysis } from './src/lib/market-analysis';
 import { createRateLimiter } from './src/lib/rate-limit';
 
 // Initialize Firebase in backend
@@ -653,17 +654,41 @@ async function commitCarsInBatches(cars: Record<string, unknown>[]) {
   const MAX_HISTORY = 30; // maks antall prishistorikk-entries per bil
 
   // Pre-les eksisterende priser for å tracke prisendringer
-  const existingPrices = new Map<string, { price: number; priceHistory?: Array<{ at: string; price: number }> }>();
+  const existingCars = new Map<string, {
+    price: number;
+    priceHistory?: Array<{ at: string; price: number }>;
+    firstSeen?: unknown;
+    adDate?: unknown;
+  }>();
   try {
     if (adminFirestore) {
-      const snap = await adminFirestore.collection('cars').select('price', 'priceHistory').get();
+      const snap = await adminFirestore.collection('cars').select('price', 'priceHistory', 'firstSeen', 'adDate').get();
       snap.docs.forEach(d => {
         const data = d.data();
         if (typeof data.price === 'number') {
-          existingPrices.set(d.id, { price: data.price, priceHistory: data.priceHistory });
+          existingCars.set(d.id, {
+            price: data.price,
+            priceHistory: data.priceHistory,
+            firstSeen: data.firstSeen,
+            adDate: data.adDate,
+          });
         }
       });
-      console.log(`Lest ${existingPrices.size} eksisterende priser for delta-tracking.`);
+      console.log(`Lest ${existingCars.size} eksisterende biler for delta-tracking.`);
+    } else {
+      const snap = await getDocs(collection(db, 'cars'));
+      snap.docs.forEach(d => {
+        const data = d.data();
+        if (typeof data.price === 'number') {
+          existingCars.set(d.id, {
+            price: data.price,
+            priceHistory: data.priceHistory as Array<{ at: string; price: number }> | undefined,
+            firstSeen: data.firstSeen,
+            adDate: data.adDate,
+          });
+        }
+      });
+      console.log(`Lest ${existingCars.size} eksisterende biler for delta-tracking.`);
     }
   } catch (e) {
     console.warn('Kunne ikke lese eksisterende priser (hopper over prishistorikk):', e);
@@ -674,17 +699,22 @@ async function commitCarsInBatches(cars: Record<string, unknown>[]) {
     const finnId = String(car.finnId ?? '');
     const newPrice = car.price as number | undefined;
     if (!finnId || typeof newPrice !== 'number') return car;
-    const prev = existingPrices.get(finnId);
+    const prev = existingCars.get(finnId);
     if (!prev) {
-      return { ...car, priceHistory: [{ at: new Date().toISOString(), price: newPrice }] };
+      const firstSeen = typeof car.adDate === 'string' || typeof car.adDate === 'number'
+        ? car.adDate
+        : new Date().toISOString();
+      return { ...car, firstSeen, priceHistory: [{ at: new Date().toISOString(), price: newPrice }] };
     }
+    const firstSeen = prev.firstSeen ?? prev.adDate ?? car.adDate ?? new Date().toISOString();
+    const baseCar = { ...car, firstSeen };
     if (prev.price !== newPrice) {
       priceChanges++;
       const history = Array.isArray(prev.priceHistory) ? prev.priceHistory.slice(-MAX_HISTORY + 1) : [];
       history.push({ at: new Date().toISOString(), price: newPrice });
-      return { ...car, priceHistory: history, prevPrice: prev.price };
+      return { ...baseCar, priceHistory: history, prevPrice: prev.price };
     }
-    return car;
+    return baseCar;
   };
 
   try {
@@ -1119,162 +1149,68 @@ async function runAnalyzer() {
       const carsSnapshot = await getDocs(query(collection(db, 'cars'), where('isAuction', '==', false)));
       cars = carsSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     }
-    
-    // Group by model and year — year=0 betyr manglende data, hopp over for fairPrice
-    const groups: Record<string, any[]> = {};
-    cars.forEach(car => {
-      if (!car.year || car.year === 0) return; // Ikke grupper biler uten årsdata
-      const key = `${car.brand}_${car.model}_${car.year}`;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(car);
-    });
+    const analysis = buildMarketAnalysis(cars as import('./src/types/car').Car[], new Date().toISOString());
+    const runId = analysis.summary.calculatedAt.replace(/[:.]/g, '-');
+    const analyzedActiveIds = new Set(analysis.carValuations.keys());
 
-    const analyzedActiveIds = new Set<string>();
-
-    for (const [key, group] of Object.entries(groups)) {
-      if (group.length < 3) continue; // Minst 3 biler for meningsfull statistikk
-      
-      // Sort by price to remove top/bottom 2% (simplified for prototype)
-      group.sort((a, b) => a.price - b.price);
-      
-      // WEIGHTED AVERAGE CALCULATION
-      // Archived (Sold) cars get weight 2, Active cars get weight 1
-      let totalPrivatePrice = 0, totalPrivateWeight = 0;
-      let totalDealerPrice = 0, totalDealerWeight = 0;
-
-      group.forEach(c => {
-        const weight = c.status === 'archived' ? 2 : 1;
-        if (c.sellerType === 'privat') {
-          totalPrivatePrice += c.price * weight;
-          totalPrivateWeight += weight;
-        } else {
-          totalDealerPrice += c.price * weight;
-          totalDealerWeight += weight;
-        }
-      });
-      
-      const avgPrivate = totalPrivateWeight > 0 ? totalPrivatePrice / totalPrivateWeight : 0;
-      const avgDealer = totalDealerWeight > 0 ? totalDealerPrice / totalDealerWeight : 0;
-      const mid = Math.floor(group.length / 2);
-      const median = group.length % 2 === 1
-        ? group[mid].price
-        : (group[mid - 1].price + group[mid].price) / 2;
-      const avgPrice =
-        avgPrivate > 0 && avgDealer > 0
-          ? (avgPrivate + avgDealer) / 2
-          : avgPrivate > 0
-            ? avgPrivate
-            : avgDealer > 0
-              ? avgDealer
-              : median;
-
+    for (const stat of analysis.marketStats) {
       const statPayload = {
-        model: group[0].model,
-        brand: group[0].brand,
-        year: group[0].year,
-        avgPricePrivate: avgPrivate,
-        avgPriceDealer: avgDealer,
-        avgPrice,
-        medianPrice: median,
-        sampleSize: group.length,
-        calculatedAt: new Date().toISOString(),
+        brand: stat.brand,
+        model: stat.model,
+        year: stat.year,
+        avgPrice: stat.avgPrice,
+        medianPrice: stat.medianPrice,
+        sampleSize: stat.sampleSize,
+        activeSampleSize: stat.activeSampleSize,
+        archivedSampleSize: stat.archivedSampleSize,
+        calculatedAt: stat.calculatedAt,
+        analysisVersion: stat.analysisVersion,
       };
       if (adminFirestore) {
-        await adminFirestore.collection('market_statistics').doc(key).set(statPayload);
+        await adminFirestore.collection('market_statistics').doc(stat.id).set(statPayload);
+        await adminFirestore.collection('analysis_snapshots').doc(`${runId}_${stat.id}`).set({ runId, ...statPayload });
       } else {
-        await setDoc(doc(db, 'market_statistics', key), statPayload);
-      }
-
-      const confidence = Math.min(1, Math.max(0.2, group.length / 25));
-      // Beregn per-bil kupp-score server-side sa klienten slipper a regne
-      const carScore = (price: number) => {
-        const savingKr = median - price;
-        const savingPct = median > 0 ? savingKr / median : 0;
-        // dealScore: 0..100, vekter savingPct med confidence
-        const dealScore = Math.round(Math.max(0, Math.min(1, savingPct)) * 100 * confidence);
-        return { savingKr, savingPct, dealScore };
-      };
-      if (adminFirestore) {
-        let carBatch = adminFirestore.batch();
-        let carBatchOps = 0;
-        for (const car of group.filter((c) => c.status === 'active')) {
-          const fid = car.finnId ?? car.id;
-          if (fid == null || fid === '') continue;
-          const s = carScore(car.price);
-          analyzedActiveIds.add(String(fid));
-          carBatch.set(
-            adminFirestore.collection('cars').doc(String(fid)),
-            { fairPrice: median, confidence, modelSampleSize: group.length, ...s },
-            { merge: true },
-          );
-          carBatchOps++;
-          if (carBatchOps >= 400) {
-            await carBatch.commit();
-            carBatch = adminFirestore.batch();
-            carBatchOps = 0;
-          }
-        }
-        if (carBatchOps > 0) await carBatch.commit();
-      } else {
-        let carBatch = writeBatch(db);
-        let carBatchOps = 0;
-        for (const car of group.filter((c) => c.status === 'active')) {
-          const fid = car.finnId ?? car.id;
-          if (fid == null || fid === '') continue;
-          const s = carScore(car.price);
-          analyzedActiveIds.add(String(fid));
-          carBatch.set(
-            doc(db, 'cars', String(fid)),
-            { fairPrice: median, confidence, modelSampleSize: group.length, ...s },
-            { merge: true },
-          );
-          carBatchOps++;
-          if (carBatchOps >= 400) {
-            await carBatch.commit();
-            carBatch = writeBatch(db);
-            carBatchOps = 0;
-          }
-        }
-        if (carBatchOps > 0) {
-          await carBatch.commit();
-        }
-      }
-
-      // Check for deals (Kupp) ONLY on active cars
-      const threshold = 0.85; // 15% below median
-      for (const car of group.filter(c => c.status === 'active')) {
-        if (car.price < median * threshold) {
-          console.log(`🚨 KUPP FUNNET! ${car.brand} ${car.model} (${car.year}) til ${car.price} kr! (Median: ${median} kr)`);
-          
-          const alertTo = process.env.ALERT_EMAIL?.trim();
-          if (transporter && alertTo) {
-            try {
-              const km = car.mileage ?? car.km ?? 0;
-              const info = await transporter.sendMail({
-                from: '"Bruktbil Analytikeren" <varsel@bruktbil.no>',
-                to: alertTo,
-                subject: `🚨 KUPP: ${car.brand} ${car.model} til ${car.price.toLocaleString('no-NO')} kr!`,
-                html: `
-                  <h2>Kupp oppdaget på Finn.no!</h2>
-                  <p>Vi har funnet en bil som ligger <b>${Math.round((1 - car.price / median) * 100)}% under</b> den vektede markedsmedianen.</p>
-                  <ul>
-                    <li><b>Bil:</b> ${car.brand} ${car.model} (${car.year})</li>
-                    <li><b>Pris:</b> ${car.price.toLocaleString('no-NO')} kr</li>
-                    <li><b>Medianpris i markedet:</b> ${Math.round(median).toLocaleString('no-NO')} kr</li>
-                    <li><b>Kilometerstand:</b> ${Number(km).toLocaleString('no-NO')} km</li>
-                    <li><b>EU-godkjent til:</b> ${car.euApprovedUntil ?? '—'}</li>
-                  </ul>
-                  <a href="https://www.finn.no/mobility/item/${car.finnId}" style="display:inline-block;padding:10px 20px;background:#0066ff;color:white;text-decoration:none;border-radius:5px;">Se annonsen på Finn.no</a>
-                `,
-              });
-              console.log(`📧 E-post sendt! Se forhåndsvisning her: ${nodemailer.getTestMessageUrl(info)}`);
-            } catch (emailErr) {
-              console.error('Failed to send email:', emailErr);
-            }
-          }
-        }
+        await setDoc(doc(db, 'market_statistics', stat.id), statPayload);
+        await setDoc(doc(db, 'analysis_snapshots', `${runId}_${stat.id}`), { runId, ...statPayload });
       }
     }
+
+    if (adminFirestore) {
+      let carBatch = adminFirestore.batch();
+      let carBatchOps = 0;
+      for (const [fid, valuation] of analysis.carValuations.entries()) {
+        carBatch.set(
+          adminFirestore.collection('cars').doc(fid),
+          { ...valuation, analysisVersion: ANALYSIS_VERSION, analyzedAt: analysis.summary.calculatedAt },
+          { merge: true },
+        );
+        carBatchOps++;
+        if (carBatchOps >= 400) {
+          await carBatch.commit();
+          carBatch = adminFirestore.batch();
+          carBatchOps = 0;
+        }
+      }
+      if (carBatchOps > 0) await carBatch.commit();
+    } else {
+      let carBatch = writeBatch(db);
+      let carBatchOps = 0;
+      for (const [fid, valuation] of analysis.carValuations.entries()) {
+        carBatch.set(
+          doc(db, 'cars', fid),
+          { ...valuation, analysisVersion: ANALYSIS_VERSION, analyzedAt: analysis.summary.calculatedAt },
+          { merge: true },
+        );
+        carBatchOps++;
+        if (carBatchOps >= 400) {
+          await carBatch.commit();
+          carBatch = writeBatch(db);
+          carBatchOps = 0;
+        }
+      }
+      if (carBatchOps > 0) await carBatch.commit();
+    }
+
     const staleModelCars = cars.filter((car) => {
       if (car.status !== 'active') return false;
       const fid = car.finnId ?? car.id;
@@ -1290,6 +1226,11 @@ async function runAnalyzer() {
             savingPct: FieldValue.delete(),
             dealScore: FieldValue.delete(),
             modelSampleSize: FieldValue.delete(),
+            comparableSampleSize: FieldValue.delete(),
+            valuationTier: FieldValue.delete(),
+            normalizedFeatures: FieldValue.delete(),
+            analysisVersion: FieldValue.delete(),
+            analyzedAt: FieldValue.delete(),
           }
         : {
             fairPrice: deleteField(),
@@ -1298,6 +1239,11 @@ async function runAnalyzer() {
             savingPct: deleteField(),
             dealScore: deleteField(),
             modelSampleSize: deleteField(),
+            comparableSampleSize: deleteField(),
+            valuationTier: deleteField(),
+            normalizedFeatures: deleteField(),
+            analysisVersion: deleteField(),
+            analyzedAt: deleteField(),
           };
       if (adminFirestore) {
         let clearBatch = adminFirestore.batch();
@@ -1329,6 +1275,46 @@ async function runAnalyzer() {
         if (clearOps > 0) await clearBatch.commit();
       }
       console.log(`Analyzer: ryddet stale prisestimat på ${staleModelCars.length} aktive biler uten gyldig modellgrunnlag.`);
+    }
+    const summaryPayload = { runId, ...analysis.summary };
+    if (adminFirestore) {
+      await adminFirestore.collection('analysis_runs').doc(runId).set(summaryPayload);
+    } else {
+      await setDoc(doc(db, 'analysis_runs', runId), summaryPayload);
+    }
+
+    for (const [fid, valuation] of analysis.carValuations.entries()) {
+      if (!(valuation.dealScore >= 35 && valuation.savingPct >= 0.08)) continue;
+      const car = cars.find((entry) => String(entry.finnId ?? entry.id) === fid);
+      if (!car) continue;
+      console.log(`🚨 KUPP FUNNET! ${car.brand} ${car.model} (${car.year}) til ${car.price} kr! (Estimert fair: ${valuation.fairPrice} kr)`);
+
+      const alertTo = process.env.ALERT_EMAIL?.trim();
+      if (transporter && alertTo) {
+        try {
+          const km = car.mileage ?? car.km ?? 0;
+          const info = await transporter.sendMail({
+            from: '"Bruktbil Analytikeren" <varsel@bruktbil.no>',
+            to: alertTo,
+            subject: `🚨 KUPP: ${car.brand} ${car.model} til ${car.price.toLocaleString('no-NO')} kr!`,
+            html: `
+              <h2>Kupp oppdaget på Finn.no!</h2>
+              <p>Vi har funnet en bil som ligger <b>${Math.round(valuation.savingPct * 100)}% under</b> estimert fair pris, basert på ${valuation.comparableSampleSize} sammenlignbare biler.</p>
+              <ul>
+                <li><b>Bil:</b> ${car.brand} ${car.model} (${car.year})</li>
+                <li><b>Pris:</b> ${car.price.toLocaleString('no-NO')} kr</li>
+                <li><b>Estimert fair pris:</b> ${Math.round(valuation.fairPrice).toLocaleString('no-NO')} kr</li>
+                <li><b>Kilometerstand:</b> ${Number(km).toLocaleString('no-NO')} km</li>
+                <li><b>Tillit:</b> ${Math.round(valuation.confidence * 100)}%</li>
+              </ul>
+              <a href="https://www.finn.no/mobility/item/${car.finnId}" style="display:inline-block;padding:10px 20px;background:#0066ff;color:white;text-decoration:none;border-radius:5px;">Se annonsen på Finn.no</a>
+            `,
+          });
+          console.log(`📧 E-post sendt! Se forhåndsvisning her: ${nodemailer.getTestMessageUrl(info)}`);
+        } catch (emailErr) {
+          console.error('Failed to send email:', emailErr);
+        }
+      }
     }
     console.log('Analyzer finished.');
   } catch (error) {
@@ -1377,6 +1363,99 @@ async function startServer() {
 
   expressApp.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  const archiveCarDocument = async (carId: string, reason: 'manual' | 'finn_404') => {
+    const nowIso = new Date().toISOString();
+    const payload = {
+      status: 'archived',
+      archivedAt: nowIso,
+      archiveReason: reason,
+      archivedBy: reason === 'manual' ? 'dashboard' : 'finn-link-check',
+    };
+
+    if (adminFirestore) {
+      await adminFirestore.collection('cars').doc(carId).set(
+        { ...payload, archiveUpdatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+    } else {
+      await setDoc(
+        doc(db, 'cars', carId),
+        { ...payload, archiveUpdatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    }
+  };
+
+  expressApp.post('/api/cars/:carId/archive', async (req, res) => {
+    if (!scanRequestAuthorized(req)) {
+      res.status(401).json({ error: 'Ugyldig eller manglende x-scan-secret.' });
+      return;
+    }
+
+    const carId = String(req.params.carId || '').trim();
+    if (!carId) {
+      res.status(400).json({ error: 'Mangler carId.' });
+      return;
+    }
+
+    try {
+      await archiveCarDocument(carId, 'manual');
+      res.json({ ok: true, carId, status: 'archived' });
+    } catch (e) {
+      console.error(`Manuell arkivering feilet for ${carId}:`, e);
+      res.status(500).json({ error: 'Kunne ikke arkivere annonsen.' });
+    }
+  });
+
+  expressApp.post('/api/cars/:carId/check-finn-link', async (req, res) => {
+    if (!scanRequestAuthorized(req)) {
+      res.status(401).json({ error: 'Ugyldig eller manglende x-scan-secret.' });
+      return;
+    }
+
+    const carId = String(req.params.carId || '').trim();
+    const rawUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+    if (!carId || !rawUrl) {
+      res.status(400).json({ error: 'Mangler carId eller url.' });
+      return;
+    }
+
+    let url: URL;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      res.status(400).json({ error: 'Ugyldig FINN-url.' });
+      return;
+    }
+    if (url.hostname !== 'finn.no' && !url.hostname.endsWith('.finn.no')) {
+      res.status(400).json({ error: 'Kan bare sjekke FINN-lenker.' });
+      return;
+    }
+
+    try {
+      const finnRes = await fetch(url.toString(), { headers: fetchHeadersAd, redirect: 'follow' });
+      const finalUrl = finnRes.url || '';
+      const html = await finnRes.text();
+      const unavailableText = html.toLowerCase();
+      const isUnavailablePage =
+        unavailableText.includes('denne annonsen er ikke lenger tilgjengelig') ||
+        unavailableText.includes('varen er solgt eller tatt ut av markedet') ||
+        unavailableText.includes('annonsen er ikke lenger tilgjengelig');
+      const isGone =
+        finnRes.status === 404 ||
+        finnRes.status === 410 ||
+        /\/404(?:[/?#]|$)/.test(finalUrl) ||
+        isUnavailablePage;
+      if (isGone) {
+        await archiveCarDocument(carId, 'finn_404');
+      }
+      res.json({ ok: true, carId, archived: isGone, finnStatus: finnRes.status });
+    } catch (e) {
+      console.error(`FINN-lenke-sjekk feilet for ${carId}:`, e);
+      res.status(502).json({ error: 'Kunne ikke sjekke FINN-lenken akkurat nå.' });
+    }
   });
 
   const triggerScraperHandler: express.RequestHandler = async (req, res) => {

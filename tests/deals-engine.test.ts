@@ -94,4 +94,22 @@ describe('sortCars', () => {
     ];
     expect(sortCars(cars, 'dealScore').map((c) => c.id)).toEqual(['b', 'a', 'c']);
   });
+
+  it('dealScore prioritizes newer ads when score gap is small', () => {
+    const cars = [
+      baseCar({ id: 'old-better', dealScore: 82, firstSeen: '2026-05-01T10:00:00.000Z' }),
+      baseCar({ id: 'new-close', dealScore: 79, firstSeen: '2026-05-05T10:00:00.000Z' }),
+      baseCar({ id: 'much-lower', dealScore: 60, firstSeen: '2026-05-06T10:00:00.000Z' }),
+    ];
+    expect(sortCars(cars, 'dealScore').map((c) => c.id)).toEqual(['new-close', 'old-better', 'much-lower']);
+  });
+
+  it('addedNewest sorts by firstSeen with adDate fallback', () => {
+    const cars = [
+      baseCar({ id: 'old', firstSeen: '2026-05-01T10:00:00.000Z' }),
+      baseCar({ id: 'fallback', adDate: '2026-05-03T10:00:00.000Z' }),
+      baseCar({ id: 'new', firstSeen: '2026-05-05T10:00:00.000Z' }),
+    ];
+    expect(sortCars(cars, 'addedNewest').map((c) => c.id)).toEqual(['new', 'fallback', 'old']);
+  });
 });

@@ -11,7 +11,9 @@ export interface Car {
   finnId?: string;
   url?: string;
   adUrl?: string;
+  firstSeen?: string | number;
   adDate?: string | number;
+  lastSeen?: string | number;
   brand?: string;
   model?: string;
   year?: number;
@@ -37,6 +39,20 @@ export interface Car {
   savingPct?: number;
   dealScore?: number;
   modelSampleSize?: number;
+  comparableSampleSize?: number;
+  valuationTier?: 'strict' | 'balanced' | 'broad';
+  normalizedFeatures?: {
+    brandKey?: string;
+    modelKey?: string;
+    year?: number;
+    mileage?: number;
+    mileageBand?: number;
+    sellerTypeKey?: string;
+    fuelKey?: string;
+    gearboxKey?: string;
+    regionKey?: string;
+    isComplete?: boolean;
+  };
   priceHistory?: Array<{ price: number; at: string }>;
   prevPrice?: number;
   euApprovedUntil?: string;
@@ -63,5 +79,7 @@ export type SortKey =
   | 'yearAsc'
   | 'kmAsc'
   | 'kmDesc'
+  | 'addedNewest'
+  | 'addedOldest'
   | 'newest'
   | 'confidence';

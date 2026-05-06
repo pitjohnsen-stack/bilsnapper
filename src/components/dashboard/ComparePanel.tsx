@@ -28,8 +28,13 @@ export function ComparePanel({ cars, isDarkMode, onRemove, onClear }: ComparePan
     {
       label: 'Besparelse',
       get: (c) => {
-        if (typeof c.fairPrice !== 'number') return '—';
-        const s = c.fairPrice - c.price;
+        const s =
+          typeof c.savingKr === 'number'
+            ? c.savingKr
+            : typeof c.fairPrice === 'number'
+              ? c.fairPrice - c.price
+              : null;
+        if (s == null) return '—';
         return s > 0 ? `${s.toLocaleString('no-NO')} kr` : '—';
       },
     },
@@ -49,6 +54,14 @@ export function ComparePanel({ cars, isDarkMode, onRemove, onClear }: ComparePan
     {
       label: 'Tillit',
       get: (c) => (typeof c.confidence === 'number' ? `${Math.round(c.confidence * 100)}%` : '—'),
+    },
+    {
+      label: 'Sammenlignbare',
+      get: (c) => (typeof c.comparableSampleSize === 'number' ? String(c.comparableSampleSize) : '—'),
+    },
+    {
+      label: 'Grunnlag',
+      get: (c) => c.valuationTier ?? '—',
     },
   ];
 

@@ -10,6 +10,8 @@ export function downloadDealsCsv(rows: Record<string, unknown>[], filename = 'br
     'sted',
     'fair_veiledende',
     'confidence',
+    'comparable_sample_size',
+    'valuation_tier',
     'finn_url',
   ];
 
@@ -31,6 +33,8 @@ export function downloadDealsCsv(rows: Record<string, unknown>[], filename = 'br
         car.region ?? car.location ?? '',
         car.fairPrice ?? '',
         car.confidence ?? '',
+        car.comparableSampleSize ?? '',
+        car.valuationTier ?? '',
         finnUrl,
       ];
       return values.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';');

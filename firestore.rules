@@ -100,6 +100,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /analysis_snapshots/{snapshotId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /analysis_runs/{runId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
     match /scans/{docId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();

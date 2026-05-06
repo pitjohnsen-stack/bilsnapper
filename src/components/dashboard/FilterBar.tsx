@@ -36,6 +36,8 @@ const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: 'yearAsc', label: 'Eldst årsmodell' },
   { value: 'kmAsc', label: 'Færrest km' },
   { value: 'kmDesc', label: 'Flest km' },
+  { value: 'addedNewest', label: 'Nylig lagt til' },
+  { value: 'addedOldest', label: 'Eldst lagt til' },
   { value: 'newest', label: 'Nyeste annonse' },
   { value: 'confidence', label: 'Høyest confidence' },
 ];

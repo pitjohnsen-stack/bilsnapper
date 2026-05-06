@@ -10,7 +10,7 @@ const FAQ = [
   },
   {
     q: 'Hva betyr «mulig verdi» og fair price?',
-    a: 'Det er modellbaserte estimater fra historikk i databasen. Lav confidence eller få sammenlignbare biler betyr usikkerhet. Bruk alltid eget skjønn og takst.',
+    a: 'Det er et estimat basert pa lignende biler i databasen, med vekt pa modell, arsmodell, kilometerstand og selgertype. Lav confidence eller fa sammenlignbare biler betyr usikkerhet. Bruk alltid eget skjonn og takst.',
   },
   {
     q: 'Hvor ofte oppdateres markedet?',

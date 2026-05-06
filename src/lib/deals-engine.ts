@@ -117,11 +117,12 @@ export function sortCars(cars: Car[], sortBy: SortKey): Car[] {
       : typeof c.fairPrice === 'number' && c.fairPrice > 0 ? (c.fairPrice - c.price) / c.fairPrice
       : -Infinity
   );
-  const adTs = (c: Car) => {
-    if (!c.adDate) return 0;
-    const d = new Date(c.adDate).getTime();
+  const dateTs = (value: Car['adDate']) => {
+    if (!value) return 0;
+    const d = new Date(value).getTime();
     return Number.isFinite(d) ? d : 0;
   };
+  const addedTs = (c: Car) => dateTs(c.firstSeen) || dateTs(c.adDate);
 
   const arr = cars.slice();
   switch (sortBy) {
@@ -131,10 +132,19 @@ export function sortCars(cars: Car[], sortBy: SortKey): Car[] {
     case 'yearAsc': arr.sort((a, b) => (a.year ?? 99999) - (b.year ?? 99999)); break;
     case 'kmAsc': arr.sort((a, b) => (a.mileage ?? Infinity) - (b.mileage ?? Infinity)); break;
     case 'kmDesc': arr.sort((a, b) => (b.mileage ?? -1) - (a.mileage ?? -1)); break;
-    case 'newest': arr.sort((a, b) => adTs(b) - adTs(a)); break;
+    case 'addedNewest': arr.sort((a, b) => addedTs(b) - addedTs(a)); break;
+    case 'addedOldest': arr.sort((a, b) => addedTs(a) - addedTs(b)); break;
+    case 'newest': arr.sort((a, b) => dateTs(b.adDate) - dateTs(a.adDate)); break;
     case 'confidence': arr.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)); break;
     case 'savingPct': arr.sort((a, b) => savingPct(b) - savingPct(a)); break;
-    case 'dealScore': arr.sort((a, b) => (b.dealScore ?? -1) - (a.dealScore ?? -1)); break;
+    case 'dealScore':
+      arr.sort((a, b) => {
+        const scoreDiff = (b.dealScore ?? -1) - (a.dealScore ?? -1);
+        // For "mulige kupp" we prefer newer ads when scores are close.
+        if (Math.abs(scoreDiff) <= 5) return addedTs(b) - addedTs(a);
+        return scoreDiff;
+      });
+      break;
     case 'savingKr':
     default: arr.sort((a, b) => saving(b) - saving(a)); break;
   }

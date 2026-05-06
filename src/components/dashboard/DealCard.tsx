@@ -3,6 +3,7 @@ import {
   Calendar,
   Car as CarIcon,
   CheckCircle,
+  Archive,
   Gauge,
   Heart,
   MapPin,
@@ -45,6 +46,9 @@ export interface DealCardProps {
   onToggleWatch?: (car: Car) => void;
   isCompared?: boolean;
   onToggleCompare?: (car: Car) => void;
+  isArchiving?: boolean;
+  onArchive?: (car: Car) => void;
+  onCheckFinnLink?: (car: Car) => void;
 }
 
 function isFresh(adDate: Car['adDate']): boolean {
@@ -56,6 +60,7 @@ function isFresh(adDate: Car['adDate']): boolean {
 
 function buildFinnUrl(car: Car): string {
   if (car.url) return car.url;
+  if (car.adUrl) return car.adUrl;
   const id = car.finnId || car.id;
   return id ? `https://www.finn.no/car/used/ad.html?finnkode=${id}` : '#';
 }
@@ -67,6 +72,9 @@ export function DealCard({
   onToggleWatch,
   isCompared,
   onToggleCompare,
+  isArchiving,
+  onArchive,
+  onCheckFinnLink,
 }: DealCardProps) {
   const km = car.mileage ?? car.km;
   const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
@@ -76,8 +84,9 @@ export function DealCard({
       : fair != null
         ? fair - car.price
         : null;
+  const comparableSampleSize = car.comparableSampleSize ?? 0;
   const hasReliableModel =
-    (car.modelSampleSize ?? 0) >= 5 && (typeof car.confidence !== 'number' || car.confidence >= 0.3);
+    comparableSampleSize >= 5 && (typeof car.confidence !== 'number' || car.confidence >= 0.3);
   const isGoodDeal = hasReliableModel && savings != null && savings > 0;
   const region = car.region || car.location;
   const eu = car.euApprovedUntil || car.euControl;
@@ -213,14 +222,15 @@ export function DealCard({
             <PriceSparkline car={car} />
           </div>
         )}
-        {(typeof car.modelSampleSize === 'number' || typeof car.confidence === 'number') && (
+        {(typeof car.comparableSampleSize === 'number' || typeof car.confidence === 'number') && (
           <div className="mb-3 text-[11px] text-slate-500 dark:text-slate-400">
-            Modellgrunnlag:{' '}
-            {typeof car.modelSampleSize === 'number' ? `${car.modelSampleSize} annonser` : 'ukjent antall'}
+            Sammenlignbare biler:{' '}
+            {typeof car.comparableSampleSize === 'number' ? `${car.comparableSampleSize} stk` : 'ukjent antall'}
+            {car.valuationTier ? ` · ${car.valuationTier}` : ''}
             {typeof car.confidence === 'number' ? ` · ${(car.confidence * 100).toFixed(0)}% sikkerhet` : ''}
           </div>
         )}
-        <div className="flex items-center justify-between border-t border-slate-200/80 pt-4 dark:border-slate-700/80">
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200/80 pt-4 dark:border-slate-700/80">
           <div className="flex items-center gap-2">
             <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-600 dark:bg-slate-900/80 dark:text-slate-300">
               {car.sellerType ?? 'Ukjent selger'}
@@ -237,14 +247,32 @@ export function DealCard({
               </label>
             )}
           </div>
-          <a
-            href={finnUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-sm font-semibold text-teal-600 hover:text-teal-500 dark:text-teal-400 dark:hover:text-teal-300"
-          >
-            Åpne på Finn →
-          </a>
+          <div className="flex shrink-0 items-center gap-2">
+            {onArchive && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onArchive(car);
+                }}
+                disabled={isArchiving}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+                title="Flytt annonsen til arkiv hvis FINN-lenken er død eller bilen er solgt"
+              >
+                <Archive size={13} />
+                {isArchiving ? 'Arkiverer' : 'Arkiver'}
+              </button>
+            )}
+            <a
+              href={finnUrl}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => onCheckFinnLink?.(car)}
+              className="text-sm font-semibold text-teal-600 hover:text-teal-500 dark:text-teal-400 dark:hover:text-teal-300"
+            >
+              Åpne på Finn →
+            </a>
+          </div>
         </div>
       </div>
     </article>
