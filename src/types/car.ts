@@ -36,6 +36,7 @@ export interface Car {
   savingKr?: number;
   savingPct?: number;
   dealScore?: number;
+  modelSampleSize?: number;
   priceHistory?: Array<{ price: number; at: string }>;
   prevPrice?: number;
   euApprovedUntil?: string;

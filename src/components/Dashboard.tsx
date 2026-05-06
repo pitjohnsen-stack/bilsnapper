@@ -158,9 +158,20 @@ export default function Dashboard({ isDarkMode, toggleDarkMode, userId, prefs }:
 
   if (loading) return <DashboardSkeleton isDarkMode={isDarkMode} />;
 
-  const possibleDeals = matchingDeals.filter(
-    (c) => typeof c.fairPrice === 'number' && c.price < c.fairPrice,
-  ).length;
+  const possibleDeals = matchingDeals.filter((c) => {
+    const saving =
+      typeof c.savingKr === 'number'
+        ? c.savingKr
+        : typeof c.fairPrice === 'number'
+          ? c.fairPrice - c.price
+          : null;
+    return (
+      saving != null &&
+      saving > 0 &&
+      (c.modelSampleSize ?? 0) >= 5 &&
+      (typeof c.confidence !== 'number' || c.confidence >= 0.3)
+    );
+  }).length;
 
   return (
     <div className="space-y-8">

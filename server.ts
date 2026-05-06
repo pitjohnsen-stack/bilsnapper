@@ -14,6 +14,7 @@ import {
   query,
   where,
   serverTimestamp,
+  deleteField,
 } from 'firebase/firestore';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import fs from 'fs';
@@ -1113,10 +1114,10 @@ async function runAnalyzer() {
     let cars: DocumentData[];
     if (adminFirestore) {
       const snap = await adminFirestore.collection('cars').where('isAuction', '==', false).get();
-      cars = snap.docs.map(d => d.data());
+      cars = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     } else {
       const carsSnapshot = await getDocs(query(collection(db, 'cars'), where('isAuction', '==', false)));
-      cars = carsSnapshot.docs.map(d => d.data());
+      cars = carsSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     }
     
     // Group by model and year — year=0 betyr manglende data, hopp over for fairPrice
@@ -1127,6 +1128,8 @@ async function runAnalyzer() {
       if (!groups[key]) groups[key] = [];
       groups[key].push(car);
     });
+
+    const analyzedActiveIds = new Set<string>();
 
     for (const [key, group] of Object.entries(groups)) {
       if (group.length < 3) continue; // Minst 3 biler for meningsfull statistikk
@@ -1198,9 +1201,10 @@ async function runAnalyzer() {
           const fid = car.finnId ?? car.id;
           if (fid == null || fid === '') continue;
           const s = carScore(car.price);
+          analyzedActiveIds.add(String(fid));
           carBatch.set(
             adminFirestore.collection('cars').doc(String(fid)),
-            { fairPrice: median, confidence, ...s },
+            { fairPrice: median, confidence, modelSampleSize: group.length, ...s },
             { merge: true },
           );
           carBatchOps++;
@@ -1218,9 +1222,10 @@ async function runAnalyzer() {
           const fid = car.finnId ?? car.id;
           if (fid == null || fid === '') continue;
           const s = carScore(car.price);
+          analyzedActiveIds.add(String(fid));
           carBatch.set(
             doc(db, 'cars', String(fid)),
-            { fairPrice: median, confidence, ...s },
+            { fairPrice: median, confidence, modelSampleSize: group.length, ...s },
             { merge: true },
           );
           carBatchOps++;
@@ -1269,6 +1274,61 @@ async function runAnalyzer() {
           }
         }
       }
+    }
+    const staleModelCars = cars.filter((car) => {
+      if (car.status !== 'active') return false;
+      const fid = car.finnId ?? car.id;
+      if (fid == null || fid === '') return false;
+      return !analyzedActiveIds.has(String(fid));
+    });
+    if (staleModelCars.length > 0) {
+      const clearPayload = adminFirestore
+        ? {
+            fairPrice: FieldValue.delete(),
+            confidence: FieldValue.delete(),
+            savingKr: FieldValue.delete(),
+            savingPct: FieldValue.delete(),
+            dealScore: FieldValue.delete(),
+            modelSampleSize: FieldValue.delete(),
+          }
+        : {
+            fairPrice: deleteField(),
+            confidence: deleteField(),
+            savingKr: deleteField(),
+            savingPct: deleteField(),
+            dealScore: deleteField(),
+            modelSampleSize: deleteField(),
+          };
+      if (adminFirestore) {
+        let clearBatch = adminFirestore.batch();
+        let clearOps = 0;
+        for (const car of staleModelCars) {
+          const fid = String(car.finnId ?? car.id);
+          clearBatch.set(adminFirestore.collection('cars').doc(fid), clearPayload, { merge: true });
+          clearOps++;
+          if (clearOps >= 400) {
+            await clearBatch.commit();
+            clearBatch = adminFirestore.batch();
+            clearOps = 0;
+          }
+        }
+        if (clearOps > 0) await clearBatch.commit();
+      } else {
+        let clearBatch = writeBatch(db);
+        let clearOps = 0;
+        for (const car of staleModelCars) {
+          const fid = String(car.finnId ?? car.id);
+          clearBatch.set(doc(db, 'cars', fid), clearPayload, { merge: true });
+          clearOps++;
+          if (clearOps >= 400) {
+            await clearBatch.commit();
+            clearBatch = writeBatch(db);
+            clearOps = 0;
+          }
+        }
+        if (clearOps > 0) await clearBatch.commit();
+      }
+      console.log(`Analyzer: ryddet stale prisestimat på ${staleModelCars.length} aktive biler uten gyldig modellgrunnlag.`);
     }
     console.log('Analyzer finished.');
   } catch (error) {

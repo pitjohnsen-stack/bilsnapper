@@ -70,8 +70,15 @@ export function DealCard({
 }: DealCardProps) {
   const km = car.mileage ?? car.km;
   const fair = typeof car.fairPrice === 'number' ? car.fairPrice : null;
-  const savings = fair != null ? fair - car.price : null;
-  const isGoodDeal = savings != null && savings > 0;
+  const savings =
+    typeof car.savingKr === 'number'
+      ? car.savingKr
+      : fair != null
+        ? fair - car.price
+        : null;
+  const hasReliableModel =
+    (car.modelSampleSize ?? 0) >= 5 && (typeof car.confidence !== 'number' || car.confidence >= 0.3);
+  const isGoodDeal = hasReliableModel && savings != null && savings > 0;
   const region = car.region || car.location;
   const eu = car.euApprovedUntil || car.euControl;
   const finnUrl = buildFinnUrl(car);
@@ -110,7 +117,7 @@ export function DealCard({
         {isGoodDeal ? (
           <span className="absolute right-3 top-3 flex items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1 text-xs font-bold text-slate-900 shadow-md">
             <Sparkles size={12} />
-            Spar {savings.toLocaleString('no-NO')} kr
+            Spar ca. {Math.round(savings).toLocaleString('no-NO')} kr
           </span>
         ) : car.confidence ? (
           <span className="absolute right-3 top-3 rounded-lg bg-teal-600/90 px-2.5 py-1 text-xs font-bold text-white shadow-md">
@@ -148,7 +155,7 @@ export function DealCard({
       </div>
       <div className="p-5">
         <div className="mb-1 flex items-start justify-between gap-2">
-          <h4 className="font-semibold leading-snug text-slate-900 dark:text-white">
+          <h4 className="min-w-0 font-semibold leading-snug text-slate-900 dark:text-white">
             {car.brand} {car.model}
           </h4>
           <div className="shrink-0 text-right">
@@ -156,8 +163,8 @@ export function DealCard({
               {car.price.toLocaleString('no-NO')} kr
             </span>
             {fair != null && (
-              <span className="block text-xs tabular-nums text-slate-400 line-through">
-                {fair.toLocaleString('no-NO')} kr
+              <span className="block text-xs tabular-nums text-slate-500 dark:text-slate-400">
+                Est. {Math.round(fair).toLocaleString('no-NO')} kr
               </span>
             )}
             {change && (
@@ -176,22 +183,22 @@ export function DealCard({
             )}
           </div>
         </div>
-        <div className="mb-4 mt-3 grid grid-cols-2 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
-          <div className="flex items-center gap-1.5">
+        <div className="mb-4 mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
+          <div className="flex min-w-0 items-center gap-1.5">
             <Calendar size={14} className="text-teal-600 dark:text-teal-400" />
-            {car.year && car.year > 0 ? car.year : '—'}
+            <span className="truncate">År: {car.year && car.year > 0 ? car.year : 'mangler'}</span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             <Gauge size={14} className="text-teal-600 dark:text-teal-400" />
-            {km != null && km > 0 ? `${Number(km).toLocaleString('no-NO')} km` : '—'}
+            <span className="truncate">Km: {km != null && km > 0 ? Number(km).toLocaleString('no-NO') : 'mangler'}</span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             <Palette size={14} className="text-teal-600 dark:text-teal-400" />
-            {car.color && car.color !== 'Ukjent' ? car.color : '—'}
+            <span className="truncate">Farge: {car.color && car.color !== 'Ukjent' ? car.color : 'mangler'}</span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             <Users size={14} className="text-teal-600 dark:text-teal-400" />
-            {car.owners != null ? `${car.owners} eier(e)` : '—'}
+            <span className="truncate">Eiere: {car.owners != null ? car.owners : 'mangler'}</span>
           </div>
           {eu && eu !== 'Ukjent' && (
             <div className="col-span-2 flex items-center gap-1.5">
@@ -204,6 +211,13 @@ export function DealCard({
           <div className="mb-3 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
             <span>Pristrend:</span>
             <PriceSparkline car={car} />
+          </div>
+        )}
+        {(typeof car.modelSampleSize === 'number' || typeof car.confidence === 'number') && (
+          <div className="mb-3 text-[11px] text-slate-500 dark:text-slate-400">
+            Modellgrunnlag:{' '}
+            {typeof car.modelSampleSize === 'number' ? `${car.modelSampleSize} annonser` : 'ukjent antall'}
+            {typeof car.confidence === 'number' ? ` · ${(car.confidence * 100).toFixed(0)}% sikkerhet` : ''}
           </div>
         )}
         <div className="flex items-center justify-between border-t border-slate-200/80 pt-4 dark:border-slate-700/80">
